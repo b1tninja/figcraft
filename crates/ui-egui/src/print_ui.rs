@@ -901,5 +901,49 @@ mod tests {
             drop(got);
             finish_pending_jobs();
         }
+
+        /// A frame with one hyperlinked word (`None` without a font on this machine).
+        fn linked_doc() -> Option<(figcraft_doc::Document, figcraft_doc::NodeId)> {
+            use figcraft_doc::{NodeKind, StyleRun, TextData};
+            let mut d = figcraft_doc::Document::new("Links");
+            let page = d.first_page()?;
+            let f = d.create(page, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 100.0).ok()?;
+            let mut td = TextData::new("Read the docs here");
+            td.style.font_size = 20.0;
+            let mut linked = td.style.clone();
+            linked.link = Some("https://example.com/figcraft".into());
+            td.runs = vec![StyleRun { start: 9, end: 13, style: linked }];
+            let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 40.0).ok()?;
+            d.get_mut(t).ok()?.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+            let (layout, _) = figcraft_text::layout_node(d.node(t)?)?;
+            (!layout.glyphs.is_empty()).then_some((d, f))
+        }
+
+        #[test]
+        fn a_hyperlinked_design_reaches_the_spooler_without_links_on_the_queues_paper_and_on_a_chosen_one() {
+            let Some((doc, frame)) = linked_doc() else { return };
+            let mut p = listed();
+            for (paper, chosen) in [(None, false), (Some(0), true)] {
+                GOT.lock().unwrap().clear();
+                p.paper = paper;
+                p.paper_chosen = chosen;
+                for gray in [false, true] {
+                    p.spooler.settings.grayscale = gray;
+                    let pdf = figcraft_engine::cmd::file::print_plan(&doc, &[frame], p.fit(), p.grayscale()).unwrap().pdf;
+                    let submit = spooler_submit("Links".into(), p.local_scaling(), p.run_job);
+                    assert_eq!(submit(pdf, p.spooler.settings.clone()).recv().unwrap(), Ok("fake".into()));
+                }
+                finish_pending_jobs();
+                let got = GOT.lock().unwrap();
+                assert_eq!(got.len(), 2);
+                for (pdf, _) in got.iter() {
+                    let s = String::from_utf8_lossy(pdf);
+                    assert!(s.starts_with("%PDF"));
+                    for k in ["/Annots", "/Link", "/URI"] {
+                        assert!(!s.contains(k), "{k} in the PDF handed to the spooler (paper {paper:?})");
+                    }
+                }
+            }
+        }
     }
 }

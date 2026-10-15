@@ -118,3 +118,43 @@ fn print_plan_lays_frames_on_paper_and_the_command_opens_the_dialog() {
     assert_eq!(r["frames"], 1);
     assert!(s.ui_requests.iter().any(|u| u.kind == "dialog.print"));
 }
+
+/// A frame with one hyperlinked word of text (`None` when this machine has no font to lay it out).
+fn linked_doc() -> Option<(figcraft_doc::Document, figcraft_doc::NodeId)> {
+    use figcraft_doc::{NodeKind, StyleRun, TextData};
+    let mut d = figcraft_doc::Document::new("Links");
+    let page = d.first_page()?;
+    let f = d.create(page, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 100.0).ok()?;
+    let mut td = TextData::new("Read the docs here");
+    td.style.font_size = 20.0;
+    let mut linked = td.style.clone();
+    linked.link = Some("https://example.com/figcraft".into());
+    td.runs = vec![StyleRun { start: 9, end: 13, style: linked }];
+    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 40.0).ok()?;
+    d.get_mut(t).ok()?.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+    let (layout, _) = figcraft_text::layout_node(d.node(t)?)?;
+    (!layout.glyphs.is_empty()).then_some((d, f))
+}
+
+/// Whether the PDF bytes carry any link: an annotation array, a link annotation or a URI action.
+fn has_links(pdf: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(pdf);
+    ["/Annots", "/Link", "/URI"].iter().any(|k| s.contains(k))
+}
+
+/// File > Print never writes link annotations, whatever the paper; exporting to PDF keeps them.
+#[test]
+fn the_print_pdf_has_no_links_but_the_export_keeps_them() {
+    use crate::cmd::file::{frames_pdf, print_plan};
+    use figcraft_pdf::{Fit, FitOrientation, FitScale};
+    let Some((d, f)) = linked_doc() else { return };
+    let page = d.first_page().unwrap();
+    assert!(has_links(&frames_pdf(&d, page, &PrintSettings::default()).unwrap().0), "the exported PDF keeps its links");
+    let a4 = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 18.0 };
+    for fit in [None, Some(a4)] {
+        for gray in [false, true] {
+            let plan = print_plan(&d, &[f], fit, gray).unwrap();
+            assert!(!has_links(&plan.pdf), "fit {fit:?}, gray {gray}");
+        }
+    }
+}

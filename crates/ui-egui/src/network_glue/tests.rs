@@ -325,3 +325,44 @@ fn the_notice_for_a_print_that_ended_names_the_printer_and_no_address() {
     assert!(!failed.contains("127.0.0.1") && !failed.contains("http"), "{failed}");
     assert_eq!(notice_text(&labels, &JobView::Idle, "Office Laser"), None);
 }
+
+/// A frame with one hyperlinked word of text (`None` when this machine has no font to lay it out).
+fn linked_doc() -> Option<(figcraft_doc::Document, figcraft_doc::NodeId)> {
+    use figcraft_doc::{NodeKind, StyleRun, TextData};
+    let mut d = figcraft_doc::Document::new("Links");
+    let page = d.first_page()?;
+    let f = d.create(page, NodeKind::Frame, "F", 0.0, 0.0, 300.0, 100.0).ok()?;
+    let mut td = TextData::new("Read the docs here");
+    td.style.font_size = 20.0;
+    let mut linked = td.style.clone();
+    linked.link = Some("https://example.com/figcraft".into());
+    td.runs = vec![StyleRun { start: 9, end: 13, style: linked }];
+    let t = d.create(f, NodeKind::Text(td), "T", 10.0, 10.0, 280.0, 40.0).ok()?;
+    d.get_mut(t).ok()?.fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::BLACK)];
+    let (layout, _) = figcraft_text::layout_node(d.node(t)?)?;
+    (!layout.glyphs.is_empty()).then_some((d, f))
+}
+
+/// Whether the PDF bytes carry any link: an annotation array, a link annotation or a URI action.
+fn has_links(pdf: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(pdf);
+    ["/Annots", "/Link", "/URI"].iter().any(|k| s.contains(k))
+}
+
+#[test]
+fn a_hyperlinked_design_goes_to_a_network_printer_without_links() {
+    let Some((doc, _)) = linked_doc() else { return };
+    let page = doc.first_page().unwrap();
+    let fit = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 18.0 };
+    let plan = print_plan(&doc, &printable_frames(&doc, page, None), Some(fit), false).expect("a plan");
+    let (mut app, printer) = app(Config::default());
+    app.doc = Arc::new(doc);
+    app.plan = plan;
+    query(&mut app);
+    app.net.state.draft.confirmed = true;
+    assert!(send(&mut app));
+    wait(&mut app, |a| !state(a).draft.running());
+    let sent = printer.job(1).unwrap().document.expect("the printer got the PDF");
+    assert!(sent.starts_with(b"%PDF"));
+    assert!(!has_links(&sent), "no /Annots, /Link or /URI in the PDF the printer receives");
+}
