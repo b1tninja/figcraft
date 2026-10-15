@@ -60,6 +60,10 @@ pub struct PdfOptions {
     /// Grayscale output: every colour and raster is converted to gray (Rec. 709 weights), so a printer
     /// that ignores a monochrome request still prints gray. Ignored with CMYK, which has its own model.
     pub grayscale: bool,
+    /// Write hyperlinked text as clickable link annotations (the default). Off for a print job: the
+    /// spooler refuses a PDF with page annotations when it fits it to the paper (shrink-to-fit), and
+    /// a printed page has nothing to click. The link styling is page content and stays.
+    pub annotations: bool,
 }
 
 /// Which way up the sheet is for a page.
@@ -131,7 +135,16 @@ impl Fit {
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        Self { outline_text: false, raster_scale: 2.0, title: None, print: PrintSettings::default(), area: None, fit: None, grayscale: false }
+        Self {
+            outline_text: false,
+            raster_scale: 2.0,
+            title: None,
+            print: PrintSettings::default(),
+            area: None,
+            fit: None,
+            grayscale: false,
+            annotations: true,
+        }
     }
 }
 
@@ -290,9 +303,12 @@ fn write(doc: &Document, pages: &[(Vec<NodeId>, Rect)], opts: &PdfOptions) -> Re
         }
         sheet.draw_marks(&mut s, ex.ink());
         s.finish();
-        for (r, url) in std::mem::take(&mut ex.links) {
-            if let Some(a) = link_annotation(r, url, sheet.width, sheet.height) {
-                page.add_annotation(a);
+        let links = std::mem::take(&mut ex.links);
+        if opts.annotations {
+            for (r, url) in links {
+                if let Some(a) = link_annotation(r, url, sheet.width, sheet.height) {
+                    page.add_annotation(a);
+                }
             }
         }
         page.finish();
