@@ -120,7 +120,7 @@ fn render_sheet(doc: &Doc, sheet: &PrintSheet, dpi: u32, gray: bool) -> Option<(
             let at = (cy as usize * w + cx as usize) * bpp;
             let Some(dst) = canvas.get_mut(at..at + bpp) else { continue };
             if gray {
-                dst[0] = ((u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000) as u8;
+                dst[0] = figcraft_pdf::print::gray_of(r, g, b);
             } else {
                 dst.copy_from_slice(&[r, g, b]);
             }
@@ -171,7 +171,7 @@ mod tests {
         let (d, f) = red_frame();
         let page = d.first_page().unwrap();
         let fit = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Portrait, scale: FitScale::Fill, margin: 36.0 };
-        let plan = print_plan(&d, &printable_frames(&d, page, None), Some(fit)).unwrap();
+        let plan = print_plan(&d, &printable_frames(&d, page, None), Some(fit), false).unwrap();
         assert_eq!(plan.sheets[0].frame, f);
         let converter = FramesToRaster::new(Arc::new(d), plan.sheets.clone());
         assert_eq!(converter.targets(DocumentFormat::Pdf), [DocumentFormat::PwgRaster]);
@@ -189,7 +189,7 @@ mod tests {
         let (d, f) = red_frame();
         let page = d.first_page().unwrap();
         let fit = Fit { paper: (200.0, 300.0), orientation: FitOrientation::Portrait, scale: FitScale::Shrink, margin: 0.0 };
-        let plan = print_plan(&d, &printable_frames(&d, page, None), Some(fit)).unwrap();
+        let plan = print_plan(&d, &printable_frames(&d, page, None), Some(fit), false).unwrap();
         let sheet = &plan.sheets[0];
         assert_eq!(sheet.frame, f);
         // 200 x 100 on 200 x 300: centred vertically at 100 pt from the top.
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(at(100, 250), [255, 255, 255], "below the frame: paper");
         let (_, _, grey) = render_sheet(&d, sheet, 72, true).unwrap();
         assert_eq!(grey.len(), 200 * 300);
-        assert_eq!(grey[150 * 200 + 100], 76, "red as luma");
+        assert_eq!(grey[150 * 200 + 100], 53, "red as Rec. 709 luma");
     }
 
     #[test]

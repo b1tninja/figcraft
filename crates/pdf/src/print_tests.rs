@@ -258,3 +258,40 @@ fn fit_places_a_page_on_a_paper_sheet() {
     let bled = export_pdf(&d, &[f], &PdfOptions { fit: Some(fit(FitOrientation::Portrait, FitScale::Fill)), print, ..Default::default() }).unwrap();
     assert_eq!(pdf_box(&bled, "MediaBox"), Some([0.0, 0.0, 218.0, 118.0]));
 }
+
+/// Every `r g b rg` / `RG` operand triple in a content stream.
+fn rgb_operands(s: &str) -> Vec<[String; 3]> {
+    let words: Vec<&str> = s.split_whitespace().collect();
+    words.windows(4).filter(|w| w[3] == "rg" || w[3] == "RG").map(|w| [w[0].to_owned(), w[1].to_owned(), w[2].to_owned()]).collect()
+}
+
+#[test]
+fn grayscale_writes_every_colour_as_rec_709_gray() {
+    let (d, f) = frame();
+    let opts = |grayscale| PdfOptions { grayscale, ..Default::default() };
+    let colour = inflated(&export_pdf(&d, &[f], &opts(false)).unwrap());
+    let gray = inflated(&export_pdf(&d, &[f], &opts(true)).unwrap());
+    assert!(colour.contains("1 0 0 rg"), "{colour}");
+    // Red is 53/255 gray (Rec. 709), the same weights as the raster path.
+    assert!(gray.contains("0.20784314 0.20784314 0.20784314 rg"), "{gray}");
+    assert!(!gray.contains("1 0 0 rg"));
+    assert_eq!(crate::print::gray_of(255, 0, 0), 53);
+    assert_eq!(crate::print::gray_of(255, 255, 255), 255);
+    assert_eq!(crate::print::gray_of(0, 0, 0), 0);
+}
+
+#[test]
+fn grayscale_leaves_no_colour_in_the_sample_document() {
+    let (d, frames) = sample_doc();
+    let colour = inflated(&export_pdf(&d, &frames, &PdfOptions::default()).unwrap());
+    assert!(rgb_operands(&colour).iter().any(|[r, g, b]| r != g || g != b), "the sample has colour to lose");
+    let gray = inflated(&export_pdf(&d, &frames, &PdfOptions { grayscale: true, ..Default::default() }).unwrap());
+    let operands = rgb_operands(&gray);
+    assert!(!operands.is_empty());
+    assert!(operands.iter().all(|[r, g, b]| r == g && g == b), "{operands:?}");
+    // The same file every time.
+    assert_eq!(
+        export_pdf(&d, &frames, &PdfOptions { grayscale: true, ..Default::default() }).unwrap(),
+        export_pdf(&d, &frames, &PdfOptions { grayscale: true, ..Default::default() }).unwrap()
+    );
+}

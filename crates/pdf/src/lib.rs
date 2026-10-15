@@ -57,6 +57,9 @@ pub struct PdfOptions {
     /// Lay each page out on a paper sheet instead of sizing it to its layers (Print). Ignored
     /// together with bleed and marks, which size the page themselves.
     pub fit: Option<Fit>,
+    /// Grayscale output: every colour and raster is converted to gray (Rec. 709 weights), so a printer
+    /// that ignores a monochrome request still prints gray. Ignored with CMYK, which has its own model.
+    pub grayscale: bool,
 }
 
 /// Which way up the sheet is for a page.
@@ -128,7 +131,7 @@ impl Fit {
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        Self { outline_text: false, raster_scale: 2.0, title: None, print: PrintSettings::default(), area: None, fit: None }
+        Self { outline_text: false, raster_scale: 2.0, title: None, print: PrintSettings::default(), area: None, fit: None, grayscale: false }
     }
 }
 

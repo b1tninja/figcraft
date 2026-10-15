@@ -26,7 +26,7 @@ fn app_with(transport: Transport) -> App {
     let frame = doc.create(page, NodeKind::Frame, "Cover", 0.0, 0.0, 200.0, 100.0).expect("a frame");
     doc.get_mut(frame).expect("the frame").fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FF0000").expect("a colour"))];
     let fit = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 18.0 };
-    let plan = print_plan(&doc, &printable_frames(&doc, page, None), Some(fit)).expect("a plan");
+    let plan = print_plan(&doc, &printable_frames(&doc, page, None), Some(fit), false).expect("a plan");
     let mut net = NetTasks::default();
     net.set_transport(transport);
     net.state.draft = net::Draft::for_address(ADDRESS);

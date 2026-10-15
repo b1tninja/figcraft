@@ -21,8 +21,17 @@ themselves.
 
 ## Where it goes
 
-- **A printer on this computer**: craft-ui's queue controls over craft-print's spooler (Windows spooler,
-  CUPS). Copies, two-sided and black and white are craft-print `Job` settings.
+One **Printer** list: every queue of this computer (the default first, marked), then the network printers
+queried in this session (by the name each reported, kept for the session only, never saved), then
+**Network printer…**, which shows the address field below. Refresh lists the queues again.
+
+- **A queue of this computer**: the spooler (Windows spooler, CUPS) through craft-print. Copies, two-sided and
+  Grayscale are craft-print `Job` settings. The job asks for the paper exactly only when the person picked a
+  paper in the dialog; otherwise (frame size, or the opening A4) it goes on the queue's own paper, shrunk to fit
+  (`Scaling::ShrinkToFit`), so a queue without a 13.33 x 7.50 in paper does not refuse it.
+- **Grayscale** (the queue's checkbox, or the network printer's Color setting) is honest: the PDF is written gray
+  (`PdfOptions::grayscale`, Rec. 709 weights; the raster path uses the same weights) and the driver is also
+  asked for monochrome (`Job::grayscale`), so a driver that ignores the hint still prints gray.
 - **A network printer** (desktop builds with the default `network-print` feature): the address of a WS-Print
   or IPP printer. `ipp://…` or an `http://` address with an `/ipp/` path segment is IPP; anything else is
   WS-Print. Only numeric private, link-local or loopback addresses are accepted (craft-wsd's policy), no host
