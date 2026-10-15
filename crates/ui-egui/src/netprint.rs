@@ -1,7 +1,7 @@
 //! Network printing on craft-print's WS-Print and IPP backends (cfg `network_print`: the
 //! `network-print` feature on a target with sockets; never the web build).
 //!
-//! The protocols, the print ticket, the job lifecycle and the deny list are craft-print's. This
+//! The protocols, the print ticket and the job lifecycle are craft-print's. This
 //! module is the thin layer between it and the Print dialog:
 //!
 //! * [`station::Station`]: one printer the person typed, behind a private [`Registry`] that holds both
@@ -11,7 +11,7 @@
 //!   frames are rendered with FigCraft's renderer instead of reading the PDF back.
 //!
 //! Everything here is generic except `raster` (and the `FIGCRAFT_`-free names are deliberate: the
-//! environment variables are the Craft family's: `CRAFT_PRINT_DENY`, `PDFCRAFT_TEST_EVENTS_BIND`).
+//! environment variable is the Craft family's: `PDFCRAFT_TEST_EVENTS_BIND`).
 //! Every job needs a [`UserConfirmed`], and nothing is sent twice by this layer.
 
 use std::sync::{Arc, PoisonError, RwLock};

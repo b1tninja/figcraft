@@ -40,13 +40,8 @@ themselves.
 
 The web build has no spooler and no sockets: File ▸ Print says to export the frames to PDF.
 
-## Safety switches
+## Test switches
 
-- `CRAFT_PRINT_DENY` (legacy `PDFCRAFT_PRINT_DENY`): comma or semicolon separated names or ids of printers
-  that are never opened, listed or printed to (matched ignoring case, hyphens and spaces against the printer
-  id and name). craft-print's registry and backends enforce it; the two read-only queries made outside the
-  registry (`netprint::station`) check it by address before sending and by the reported name before keeping
-  the answer. A denied printer is `ErrorKind::Denied`.
 - `PDFCRAFT_TEST_EVENTS_BIND` (test builds): `ip:port` for the opt-in WS-Eventing listener a WS-Print printer
   can call; without it jobs are polled.
 
