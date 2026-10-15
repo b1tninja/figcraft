@@ -95,6 +95,20 @@ impl NetTasks {
         self.transport.clone()
     }
 
+    /// Whether the printer's Color setting is Grayscale (as it will be sent).
+    pub(crate) fn grayscale(&self) -> bool {
+        self.state.draft.request(None).color == Some(net::ColorMode::Monochrome)
+    }
+
+    /// Ask the printer at the typed address what it lists, as the Query button does. `false` when the
+    /// address is refused or another query or job is running.
+    pub(crate) fn query_now(&mut self, ctx: &egui::Context) -> bool {
+        let (transport, stations) = (self.transport.clone(), Arc::clone(&self.stations));
+        let query = self.query.get_or_insert_with(|| query_printer(transport, Some(ctx.clone()), stations));
+        let address_ok = validate(&self.state.draft.normalized_url()).is_ok();
+        self.state.start_query(query, address_ok)
+    }
+
     /// Draw the section; `sheets_ok`: the dialog's settings give something to print.
     pub(crate) fn show(&mut self, ui: &mut egui::Ui, sheets_ok: bool) -> net::Response {
         let (transport, ctx, stations) = (self.transport.clone(), ui.ctx().clone(), Arc::clone(&self.stations));
@@ -362,7 +376,7 @@ pub(crate) fn labels() -> Labels<'static> {
         photo: tr("Photo"),
         color: tr("Color:"),
         color_color: tr("Colour"),
-        color_monochrome: tr("Black and white"),
+        color_monochrome: tr("Grayscale"),
         resolution: tr("Resolution:"),
         resolution_dpi: "{dpi} dpi",
         resolution_dpi_xy: "{x} x {y} dpi",
@@ -371,7 +385,7 @@ pub(crate) fn labels() -> Labels<'static> {
         unsupported_sides: tr("This printer only prints one-sided."),
         unsupported_orientation: tr("This printer does not take an orientation setting."),
         unsupported_quality: tr("This printer does not take a quality setting."),
-        unsupported_color: tr("This printer only prints in black and white."),
+        unsupported_color: tr("This printer only prints in grayscale."),
         unsupported_resolution: tr("This printer does not take a resolution setting."),
         unconfirmed_note: tr("Not confirmed by the printer"),
         confirm: tr("I confirm sending this document to this printer"),

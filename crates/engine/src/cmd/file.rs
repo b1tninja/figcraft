@@ -1264,8 +1264,9 @@ pub fn printable_frames(doc: &Document, page: NodeId, only: Option<&[NodeId]>) -
 }
 
 /// The print job for `frames` (see [`printable_frames`]): one sheet each, on the paper of `fit`
-/// (`None`: each sheet is its frame's own size). Print options (bleed, marks) are not used here.
-pub fn print_plan(doc: &Document, frames: &[NodeId], fit: Option<figcraft_pdf::Fit>) -> Result<PrintPlan> {
+/// (`None`: each sheet is its frame's own size). `grayscale`: the PDF is gray itself (Rec. 709), for a
+/// printer that ignores a monochrome request. Print options (bleed, marks) are not used here.
+pub fn print_plan(doc: &Document, frames: &[NodeId], fit: Option<figcraft_pdf::Fit>, grayscale: bool) -> Result<PrintPlan> {
     let cmd = "file.print";
     if frames.is_empty() {
         return Err(EngineError::Disabled(cmd.into(), "there are no visible frames to print".into()));
@@ -1284,7 +1285,7 @@ pub fn print_plan(doc: &Document, frames: &[NodeId], fit: Option<figcraft_pdf::F
         sheets.push(PrintSheet { frame, bounds, sheet: placed.sheet, scale: placed.scale, offset: placed.offset });
     }
     let groups: Vec<Vec<NodeId>> = frames.iter().map(|f| vec![*f]).collect();
-    let opts = figcraft_pdf::PdfOptions { title: Some(doc.name.clone()), fit, ..Default::default() };
+    let opts = figcraft_pdf::PdfOptions { title: Some(doc.name.clone()), fit, grayscale, ..Default::default() };
     let pdf = figcraft_pdf::export_groups(&doc, &groups, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
     Ok(PrintPlan { pdf, sheets })
 }

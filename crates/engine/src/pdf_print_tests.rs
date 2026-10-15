@@ -102,7 +102,7 @@ fn print_plan_lays_frames_on_paper_and_the_command_opens_the_dialog() {
     assert_eq!(printable_frames(doc, page, None), vec![f]);
     assert!(printable_frames(doc, page, Some(&[])).is_empty());
     let a4 = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 0.0 };
-    let plan = print_plan(doc, &[f], Some(a4)).unwrap();
+    let plan = print_plan(doc, &[f], Some(a4), false).unwrap();
     assert!(plan.pdf.starts_with(b"%PDF"));
     // 200 x 100 is landscape: the A4 sheet turns, the frame keeps its size and is centred.
     let sheet = &plan.sheets[0];
@@ -110,9 +110,9 @@ fn print_plan_lays_frames_on_paper_and_the_command_opens_the_dialog() {
     assert_eq!(sheet.scale, 1.0);
     assert!((sheet.offset.0 - (841.89 - 200.0) / 2.0).abs() < 1e-9);
     // Without a paper the sheet is the frame.
-    let own = print_plan(doc, &[f], None).unwrap();
+    let own = print_plan(doc, &[f], None, false).unwrap();
     assert_eq!(own.sheets[0].sheet, (200.0, 100.0));
-    assert!(print_plan(doc, &[], None).is_err());
+    assert!(print_plan(doc, &[], None, false).is_err());
     // The command opens the dialog and prints nothing.
     let r = s.execute("file.print", &json!({})).unwrap();
     assert_eq!(r["frames"], 1);

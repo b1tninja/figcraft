@@ -1,13 +1,14 @@
 //! File ▸ Print: the frames of the page (or the selected ones) on paper, to a printer of this
-//! computer or to a network printer typed by address.
+//! computer or to a network printer typed by address, both chosen from one Printer list.
 //!
 //! The dialog chooses *what* is printed: which frames, on which paper, the way up and how a frame is
 //! scaled onto the sheet. The engine lays the frames out ([`figcraft_engine::cmd::file::print_plan`]: a
 //! print-ready PDF, one sheet per frame) and the destination sends it:
 //!
-//! * **System printer**: craft-ui's queue controls over craft-print's spooler (Windows spooler, CUPS).
+//! * **System printer**: the queues of the Printer list, craft-ui's queue settings over craft-print's spooler (Windows spooler, CUPS).
 //!   Listing the queues and sending the job run on their own threads.
-//! * **Network printer** (cfg `network_print`): craft-ui's `printing::network` destination over
+//! * **Network printer** (cfg `network_print`): the list's "Network printer…" entry (and the printers
+//!   already queried in this session, which it remembers by their reported name); craft-ui's `printing::network` destination over
 //!   [`crate::network_glue`], WS-Print or IPP by address, with the capability states of the printer, the
 //!   per-job confirmation and a tracked job whose status lines name the printer.
 //!
@@ -66,6 +67,34 @@ pub enum Destination {
     Network,
 }
 
+/// One line of the Printer list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Entry {
+    /// A queue of this computer.
+    System(String),
+    /// A network printer queried earlier in this session (an index into [`PrintUi::known`]).
+    #[cfg(network_print)]
+    Known(usize),
+    /// "Network printer…": an address to type.
+    #[cfg(network_print)]
+    Network,
+}
+
+/// A network printer that answered a query: kept for the session only (never saved), so it can be
+/// printed to again without retyping its address.
+#[cfg(network_print)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KnownPrinter {
+    /// The name the printer reported.
+    pub name: String,
+    /// The normalised address it was queried at.
+    pub url: String,
+}
+
+/// Hands a print-ready PDF to a queue and says what the spooler answered.
+#[cfg(not(target_arch = "wasm32"))]
+pub type RunJob = fn(&[u8], &craft_print::Job) -> Result<String, String>;
+
 /// The Print dialog's state.
 pub struct PrintUi {
     pub open: bool,
@@ -74,10 +103,26 @@ pub struct PrintUi {
     pub paper: Option<usize>,
     pub orientation: FitOrientation,
     pub scale: FitScale,
+    /// Where the chosen entry of the Printer list sends the job.
     pub destination: Destination,
+    /// The person picked the paper themselves (not the opening A4): only then is a local queue made
+    /// to have exactly that paper.
+    pub paper_chosen: bool,
     /// The system printer queues and the last job sent to one.
     #[cfg(not(target_arch = "wasm32"))]
     pub spooler: craft_ui::printing::State,
+    /// Lists the system queues (the spooler; tests give a fixed list).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) discover: craft_ui::printing::Discover,
+    /// Hands a print-ready PDF to a queue (the spooler; tests record the job).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) run_job: RunJob,
+    /// The queues were asked for since the dialog last opened.
+    #[cfg(not(target_arch = "wasm32"))]
+    listed: bool,
+    /// The network printers that answered a query in this session.
+    #[cfg(network_print)]
+    pub known: Vec<KnownPrinter>,
     /// The network destination.
     #[cfg(network_print)]
     pub(crate) net: crate::network_glue::NetTasks,
@@ -92,8 +137,17 @@ impl Default for PrintUi {
             orientation: FitOrientation::Auto,
             scale: FitScale::Shrink,
             destination: Destination::System,
+            paper_chosen: false,
             #[cfg(not(target_arch = "wasm32"))]
             spooler: craft_ui::printing::State::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            discover: spooler_discover(),
+            #[cfg(not(target_arch = "wasm32"))]
+            run_job: spooler_run,
+            #[cfg(not(target_arch = "wasm32"))]
+            listed: false,
+            #[cfg(network_print)]
+            known: Vec::new(),
             #[cfg(network_print)]
             net: crate::network_glue::NetTasks::default(),
         }
@@ -110,6 +164,113 @@ impl PrintUi {
     /// The media name of the chosen paper, for printers that list it.
     pub fn media(&self) -> Option<&'static str> {
         self.paper.and_then(|i| PAPERS.get(i)).map(|p| p.media)
+    }
+
+    /// Whether the job comes out gray: the local queue's Grayscale box, or the network printer's Color
+    /// setting. The PDF (and the raster made from the frames) follows it, so what is sent is gray
+    /// exactly when gray is what the person asked for; the driver is asked for monochrome as well.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn grayscale(&self) -> bool {
+        match self.destination {
+            Destination::System => self.spooler.settings.grayscale,
+            #[cfg(network_print)]
+            Destination::Network => self.net.grayscale(),
+            #[cfg(not(network_print))]
+            Destination::Network => false,
+        }
+    }
+
+    /// How a local queue takes the sheets: exactly on the paper the person picked (a queue that lacks
+    /// it refuses the job), else on the queue's own paper with the sheet shrunk to fit (frame-sized
+    /// sheets, and the opening A4 nobody chose).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn local_scaling(&self) -> craft_print::Scaling {
+        if self.paper.is_some() && self.paper_chosen { craft_print::Scaling::Exact } else { craft_print::Scaling::ShrinkToFit }
+    }
+
+    /// The lines of the Printer list, in order: the queues of this computer (the default first), the
+    /// network printers queried in this session, then "Network printer…".
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn entries(&self) -> Vec<Entry> {
+        let mut queues: Vec<&craft_ui::printing::Printer> = self.spooler.printers.iter().collect();
+        queues.sort_by_key(|q| !q.default);
+        #[allow(unused_mut)]
+        let mut entries: Vec<Entry> = queues.into_iter().map(|q| Entry::System(q.name.clone())).collect();
+        #[cfg(network_print)]
+        {
+            entries.extend((0..self.known.len()).map(Entry::Known));
+            entries.push(Entry::Network);
+        }
+        entries
+    }
+
+    /// The line the current choice is, if any.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn selected(&self) -> Option<Entry> {
+        match self.destination {
+            Destination::System => {
+                let name = &self.spooler.settings.printer;
+                self.spooler.printers.iter().any(|q| q.name == *name).then(|| Entry::System(name.clone()))
+            }
+            #[cfg(network_print)]
+            Destination::Network => {
+                let url = self.net.state.draft.normalized_url();
+                Some(self.known.iter().position(|k| k.url == url).map_or(Entry::Network, Entry::Known))
+            }
+            #[cfg(not(network_print))]
+            Destination::Network => None,
+        }
+    }
+
+    /// The text of a line of the list. The default queue says so.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn entry_label(&self, entry: &Entry) -> String {
+        match entry {
+            Entry::System(name) if self.spooler.printers.iter().any(|q| q.name == *name && q.default) => trf("{name} (default)", &[("name", name)]),
+            Entry::System(name) => name.clone(),
+            #[cfg(network_print)]
+            Entry::Known(i) => self.known.get(*i).map_or_else(String::new, |k| k.name.clone()),
+            #[cfg(network_print)]
+            Entry::Network => tr("Network printer…").to_owned(),
+        }
+    }
+
+    /// Pick a line of the list. A printer queried before comes back with its address filled in (and
+    /// is asked again if the dialog has forgotten what it said).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn choose(&mut self, entry: &Entry, ctx: &Context) {
+        let _ = ctx;
+        match entry {
+            Entry::System(name) => {
+                self.destination = Destination::System;
+                self.spooler.settings.printer.clone_from(name);
+            }
+            #[cfg(network_print)]
+            Entry::Network => self.destination = Destination::Network,
+            #[cfg(network_print)]
+            Entry::Known(i) => {
+                let Some(known) = self.known.get(*i).cloned() else { return };
+                self.destination = Destination::Network;
+                if self.net.state.draft.normalized_url() != known.url {
+                    self.net.state.draft.url = known.url;
+                    self.net.state.draft.address_edited();
+                }
+                if self.net.state.draft.printer().is_none() {
+                    self.net.query_now(ctx);
+                }
+            }
+        }
+    }
+
+    /// Remember the network printer the last query reached, by the name it reported.
+    #[cfg(network_print)]
+    pub fn remember_network_printer(&mut self) {
+        let Some(name) = self.net.state.draft.printer().map(|p| p.name.trim().to_owned()).filter(|n| !n.is_empty()) else { return };
+        let url = self.net.state.draft.normalized_url();
+        match self.known.iter_mut().find(|k| k.url == url) {
+            Some(k) => k.name = name,
+            None => self.known.push(KnownPrinter { name, url }),
+        }
     }
 }
 
@@ -136,7 +297,7 @@ fn plan(app: &FigApp) -> Result<(std::sync::Arc<figcraft_doc::Document>, figcraf
     use figcraft_engine::cmd::file::print_plan;
     let frames = frames(app, app.ui.print.scope);
     let ds = app.session.ds().map_err(|e| e.to_string())?;
-    let plan = print_plan(&ds.doc, &frames, app.ui.print.fit()).map_err(|e| e.to_string())?;
+    let plan = print_plan(&ds.doc, &frames, app.ui.print.fit(), app.ui.print.grayscale()).map_err(|e| e.to_string())?;
     // The document the raster path renders from: its colours are sRGB, like the PDF's.
     let doc = std::sync::Arc::new(ds.doc.in_srgb().into_owned());
     Ok((doc, plan))
@@ -150,6 +311,7 @@ pub fn request(app: &mut FigApp) {
     {
         let p = &mut app.ui.print;
         p.open = true;
+        p.listed = false;
         #[cfg(network_print)]
         p.net.state.dialog_opened();
     }
@@ -161,6 +323,8 @@ pub fn poll(app: &mut FigApp, ctx: &Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let open = app.ui.print.open;
+        #[cfg(network_print)]
+        app.ui.print.remember_network_printer();
         #[cfg(network_print)]
         if let Some(notice) = app.ui.print.net.poll(ctx, open) {
             app.toast(notice);
@@ -208,12 +372,16 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         egui::Grid::new("print_layout").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
             ui.label(tr("Paper:"));
             let paper_text = p.paper.and_then(|i| PAPERS.get(i)).map_or_else(|| tr("Frame size").to_owned(), |paper| tr(paper.name).to_owned());
+            let paper_before = p.paper;
             egui::ComboBox::from_id_salt("print_paper").selected_text(paper_text).show_ui(ui, |ui| {
                 ui.selectable_value(&mut p.paper, None, tr("Frame size"));
                 for (i, paper) in PAPERS.iter().enumerate() {
                     ui.selectable_value(&mut p.paper, Some(i), tr(paper.name));
                 }
             });
+            if p.paper != paper_before {
+                p.paper_chosen = true;
+            }
             ui.end_row();
             // Orientation and scale only mean something on a paper.
             ui.add_enabled_ui(p.paper.is_some(), |ui| {
@@ -253,16 +421,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(6.0);
-        crate::widgets::label(ui, tr("Print to"), t.text_secondary);
-        ui.horizontal(|ui| {
-            if crate::widgets::radio(ui, p.destination == Destination::System, tr("A printer on this computer")) {
-                p.destination = Destination::System;
-            }
-            #[cfg(network_print)]
-            if crate::widgets::radio(ui, p.destination == Destination::Network, tr("A network printer")) {
-                p.destination = Destination::Network;
-            }
-        });
+        printer_picker(ui, p);
         ui.add_space(6.0);
         let sheets_ok = match p.scope {
             Scope::Page => all > 0,
@@ -290,24 +449,86 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     }
 }
 
-/// The system printer's controls and its Print button. Returns whether Print was clicked.
+/// The Printer list: the queues of this computer, the network printers asked this session and
+/// "Network printer…", with Refresh beside it.
+#[cfg(not(target_arch = "wasm32"))]
+fn printer_picker(ui: &mut egui::Ui, p: &mut PrintUi) {
+    let ctx = ui.ctx().clone();
+    if !p.listed {
+        p.listed = true;
+        p.spooler.refresh(&p.discover);
+    }
+    p.spooler.poll(&ctx);
+    #[cfg(network_print)]
+    p.remember_network_printer();
+    let entries = p.entries();
+    let selected = p.selected();
+    let shown = match &selected {
+        Some(entry) => p.entry_label(entry),
+        None => tr("Select a printer").to_owned(),
+    };
+    let mut picked = None;
+    ui.add_enabled_ui(!p.spooler.busy(), |ui| {
+        ui.horizontal(|ui| {
+            let label = ui.label(tr("Printer:"));
+            egui::ComboBox::from_id_salt("print_printer")
+                .width(230.0)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for entry in &entries {
+                        if ui.selectable_label(selected.as_ref() == Some(entry), p.entry_label(entry)).clicked() {
+                            picked = Some(entry.clone());
+                        }
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+            if ui.add_enabled(!p.spooler.discovering(), egui::Button::new(tr("Refresh"))).clicked() {
+                p.spooler.refresh(&p.discover);
+            }
+        });
+    });
+    if let Some(entry) = picked {
+        p.choose(&entry, &ctx);
+    }
+}
+
+/// The controls of a printer of this computer, its feedback and its Print button. Returns whether
+/// Print was clicked.
 #[cfg(not(target_arch = "wasm32"))]
 fn system_section(ui: &mut egui::Ui, p: &mut PrintUi, t: &crate::theme::Tokens, sheets_ok: bool) -> bool {
-    use craft_ui::printing::Feedback;
-    let discover = spooler_discover();
-    let labels = craft_ui::printing::Labels {
-        printer: tr("Printer:"),
-        select_printer: tr("Select a printer"),
-        refresh: tr("Refresh"),
-        copies: tr("Copies:"),
-        printer_default: tr("Printer default"),
-        duplex: tr("Two-sided:"),
-        one_sided: tr("Off"),
-        long_edge: tr("Flip on long edge"),
-        short_edge: tr("Flip on short edge"),
-        grayscale: tr("Print in black and white"),
-    };
-    p.spooler.show(ui, egui::Id::new("system-printer"), &discover, &labels);
+    use craft_ui::printing::{Duplex, Feedback};
+    let busy = p.spooler.busy();
+    ui.add_enabled_ui(!busy, |ui| {
+        let settings = &mut p.spooler.settings;
+        ui.horizontal(|ui| {
+            let label = ui.label(tr("Copies:"));
+            ui.add(egui::DragValue::new(&mut settings.copies).range(1..=999)).labelled_by(label.id);
+        });
+        let choices = [
+            (None, tr("Printer default")),
+            (Some(Duplex::Off), tr("Off")),
+            (Some(Duplex::LongEdge), tr("Flip on long edge")),
+            (Some(Duplex::ShortEdge), tr("Flip on short edge")),
+        ];
+        ui.horizontal(|ui| {
+            let label = ui.label(tr("Two-sided:"));
+            let shown = choices.iter().find(|(value, _)| *value == settings.duplex).map_or(tr("Printer default"), |(_, text)| *text);
+            egui::ComboBox::from_id_salt("print_duplex")
+                .width(230.0)
+                .wrap_mode(egui::TextWrapMode::Truncate)
+                .selected_text(shown)
+                .show_ui(ui, |ui| {
+                    for (value, text) in choices {
+                        ui.selectable_value(&mut settings.duplex, value, text);
+                    }
+                })
+                .response
+                .labelled_by(label.id);
+        });
+        ui.checkbox(&mut settings.grayscale, tr("Grayscale"));
+    });
     let message = match &p.spooler.message {
         None => None,
         Some(Feedback::FindingPrinters) => Some(tr("Looking for printers…").to_owned()),
@@ -338,7 +559,7 @@ fn send(app: &mut FigApp, ctx: &Context) {
     let name = doc.name.clone();
     match app.ui.print.destination {
         Destination::System => {
-            let submit = spooler_submit(name);
+            let submit = spooler_submit(name, app.ui.print.local_scaling(), app.ui.print.run_job);
             let settings = app.ui.print.spooler.settings.clone();
             if app.ui.print.spooler.begin(submit(plan.pdf, settings)).is_err() {
                 app.toast(tr("A print job is already being sent."));
@@ -370,29 +591,41 @@ fn spooler_discover() -> craft_ui::printing::Discover {
     })
 }
 
+/// The job for a local queue: the person's settings, the title, and how the sheets are taken
+/// (see [`PrintUi::local_scaling`]). `grayscale` is the driver hint; the PDF is gray itself.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn local_job(settings: &craft_ui::printing::Settings, title: String, scaling: craft_print::Scaling) -> craft_print::Job {
+    craft_print::Job {
+        printer: Some(settings.printer.clone()),
+        copies: settings.copies.clamp(1, 999),
+        duplex: settings.duplex.map(|d| match d {
+            craft_ui::printing::Duplex::Off => craft_print::Duplex::Off,
+            craft_ui::printing::Duplex::LongEdge => craft_print::Duplex::LongEdge,
+            craft_ui::printing::Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
+        }),
+        grayscale: settings.grayscale,
+        scaling,
+        title,
+        ..craft_print::Job::default()
+    }
+}
+
+/// The spooler: Windows' queues, CUPS.
+#[cfg(not(target_arch = "wasm32"))]
+fn spooler_run(pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
+    craft_print::submit(pdf, job).map_err(|e| e.to_string())
+}
+
 /// Sends a print-ready PDF to a system queue on a thread of its own. Workers are kept until
 /// [`finish_pending_jobs`]: dropping the handle at exit could kill the spooler hand-over half way.
 #[cfg(not(target_arch = "wasm32"))]
-fn spooler_submit(title: String) -> craft_ui::printing::Submit {
+fn spooler_submit(title: String, scaling: craft_print::Scaling, run: RunJob) -> craft_ui::printing::Submit {
     Box::new(move |pdf, settings| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let title = title.clone();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
-            let job = craft_print::Job {
-                printer: Some(settings.printer),
-                copies: settings.copies.clamp(1, 999),
-                duplex: settings.duplex.map(|d| match d {
-                    craft_ui::printing::Duplex::Off => craft_print::Duplex::Off,
-                    craft_ui::printing::Duplex::LongEdge => craft_print::Duplex::LongEdge,
-                    craft_ui::printing::Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
-                }),
-                grayscale: settings.grayscale,
-                // The sheets are laid out on the paper already.
-                scaling: craft_print::Scaling::Exact,
-                title,
-                ..craft_print::Job::default()
-            };
-            let _ = sender.send(craft_print::submit(&pdf, &job).map_err(|e| e.to_string()));
+            let job = local_job(&settings, title, scaling);
+            let _ = sender.send(run(&pdf, &job));
         });
         if let Ok(worker) = worker {
             let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -451,6 +684,222 @@ mod tests {
         for p in PAPERS {
             assert!(p.short < p.long, "{}", p.name);
             assert!(!p.media.is_empty());
+        }
+    }
+
+    // ---- one Printer list, Grayscale, and the paper of a local job (in-process fakes only) ----
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod dialog {
+        use std::sync::Mutex;
+
+        use super::*;
+        use crate::layers_drag_tests::Ui;
+        use crate::live_tests::{flat, has_text};
+        use craft_ui::printing::{Discover, Printer, Settings};
+        use figcraft_engine::Session;
+
+        /// Two queues (the second is the default), listed without asking the spooler.
+        fn fake_queues() -> Discover {
+            Box::new(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let _ = tx.send(vec![Printer { name: "Office Laser".into(), default: false }, Printer { name: "Front Desk".into(), default: true }]);
+                rx
+            })
+        }
+
+        /// What the fake spooler was handed.
+        static GOT: Mutex<Vec<(Vec<u8>, craft_print::Job)>> = Mutex::new(Vec::new());
+
+        fn fake_run(pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
+            GOT.lock().unwrap().push((pdf.to_vec(), job.clone()));
+            Ok("fake".into())
+        }
+
+        fn listed() -> PrintUi {
+            let mut p = PrintUi { discover: fake_queues(), run_job: fake_run, ..PrintUi::default() };
+            p.spooler.refresh(&p.discover);
+            p.spooler.poll(&egui::Context::default());
+            p.listed = true;
+            p
+        }
+
+        fn shown(u: &mut Ui) -> Vec<egui::Shape> {
+            flat(&u.frame_output(vec![]).shapes)
+        }
+
+        fn open_dialog() -> Ui {
+            let mut u = Ui::new(Session::empty());
+            u.app.ui.print.discover = fake_queues();
+            u.app.ui.print.run_job = fake_run;
+            u.app.ui.print.open = true;
+            u.frame(vec![]);
+            u.frame(vec![]);
+            u
+        }
+
+        #[test]
+        fn the_list_has_the_real_queues_first_the_default_marked_and_the_network_entry_last() {
+            let p = listed();
+            let entries = p.entries();
+            assert_eq!(entries.first(), Some(&Entry::System("Front Desk".into())), "the default queue leads");
+            assert_eq!(entries.get(1), Some(&Entry::System("Office Laser".into())));
+            assert_eq!(p.entry_label(&entries[0]), "Front Desk (default)");
+            assert_eq!(p.entry_label(&entries[1]), "Office Laser");
+            #[cfg(network_print)]
+            {
+                assert_eq!(entries.last(), Some(&Entry::Network));
+                assert_eq!(p.entry_label(&Entry::Network), "Network printer…");
+                assert_eq!(entries.len(), 3);
+            }
+            // The default is chosen when the list arrives.
+            assert_eq!(p.selected(), Some(Entry::System("Front Desk".into())));
+        }
+
+        #[test]
+        fn the_dialog_has_one_printer_list_and_no_destination_switch() {
+            let mut u = open_dialog();
+            let s = shown(&mut u);
+            assert!(has_text(&s, "Printer:") && has_text(&s, "Front Desk (default)"), "the default queue is the choice");
+            assert!(has_text(&s, "Copies:") && has_text(&s, "Grayscale"));
+            for old in ["Print to", "A printer on this computer", "A network printer", "Print in black and white"] {
+                assert!(!has_text(&s, old), "{old}");
+            }
+            assert!(!has_text(&s, "Query printer"), "the network section waits for its entry");
+        }
+
+        #[cfg(network_print)]
+        #[test]
+        fn choosing_the_network_entry_shows_the_network_section() {
+            let mut u = open_dialog();
+            let ctx = u.ctx.clone();
+            u.app.ui.print.choose(&Entry::Network, &ctx);
+            let s = shown(&mut u);
+            assert!(has_text(&s, "Query printer"), "the address field's Query printer button");
+            assert!(has_text(&s, "Network printer…"), "the list shows the entry it is on");
+            assert!(!has_text(&s, "Copies:"), "the queue's own settings are not shown for a network printer");
+            // Back to a queue: the local settings return and the network section goes.
+            u.app.ui.print.choose(&Entry::System("Office Laser".into()), &ctx);
+            let s = shown(&mut u);
+            assert!(!has_text(&s, "Query printer") && has_text(&s, "Grayscale") && has_text(&s, "Office Laser"));
+        }
+
+        #[cfg(network_print)]
+        #[test]
+        fn a_queried_network_printer_becomes_its_own_entry_by_its_reported_name() {
+            use craft_print::wsd::testing::{FakeConfig, FakePrinter, MemTransport};
+            let mut p = listed();
+            let ctx = egui::Context::default();
+            let printer = FakePrinter::new(FakeConfig::default());
+            p.net.set_transport(std::sync::Arc::new(MemTransport(printer.clone())));
+            p.net.state.draft = craft_ui::printing::network::Draft::for_address("127.0.0.1:5357/printer");
+            p.choose(&Entry::Network, &ctx);
+            assert!(p.net.query_now(&ctx));
+            for _ in 0..400 {
+                p.net.state.poll(&ctx);
+                if !p.net.state.draft.querying() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            p.remember_network_printer();
+            p.remember_network_printer();
+            assert_eq!(p.known.len(), 1, "once, however often it is noted");
+            let name = p.known[0].name.clone();
+            assert!(!name.is_empty());
+            let entries = p.entries();
+            assert_eq!(entries[entries.len() - 2], Entry::Known(0), "the printer sits before 'Network printer…'");
+            assert_eq!(entries.last(), Some(&Entry::Network));
+            assert_eq!(p.entry_label(&Entry::Known(0)), name);
+            assert_eq!(p.selected(), Some(Entry::Known(0)));
+            // Pick a queue, then the remembered printer: no retyping, the address and its answer are back.
+            p.choose(&Entry::System("Office Laser".into()), &ctx);
+            assert_eq!(p.destination, Destination::System);
+            p.choose(&Entry::Known(0), &ctx);
+            assert_eq!(p.destination, Destination::Network);
+            assert_eq!(p.net.state.draft.url, "127.0.0.1:5357/printer");
+            assert!(p.net.state.draft.printer().is_some());
+            assert_eq!(printer.jobs(), 0, "reading only; nothing was printed");
+        }
+
+        #[test]
+        fn grayscale_is_the_one_word_and_the_pdf_follows_the_choice() {
+            let mut p = listed();
+            assert!(!p.grayscale());
+            // The network colour choice says Grayscale too, with its reason text.
+            #[cfg(network_print)]
+            {
+                let labels = crate::network_glue::labels();
+                assert_eq!(labels.color_monochrome, "Grayscale");
+                assert_eq!(labels.unsupported_color, "This printer only prints in grayscale.");
+            }
+            // A red frame.
+            let mut doc = figcraft_doc::Document::new("Red");
+            let page = doc.first_page().unwrap();
+            let frame = doc.create(page, figcraft_doc::NodeKind::Frame, "F", 0.0, 0.0, 200.0, 100.0).unwrap();
+            doc.get_mut(frame).unwrap().fills = vec![figcraft_color::Paint::solid(figcraft_color::Color::from_hex("FF0000").unwrap())];
+            let fit = p.fit();
+            let plan = |gray| figcraft_engine::cmd::file::print_plan(&doc, &[frame], fit, gray).unwrap().pdf;
+            let colour = plan(p.grayscale());
+            p.spooler.settings.grayscale = true;
+            assert!(p.grayscale());
+            let gray = plan(p.grayscale());
+            // (figcraft-pdf's tests read the colour operators; here: the dialog's choice reaches the PDF.)
+            assert_ne!(colour, gray, "ticking Grayscale changes the PDF that is sent");
+            assert_eq!(colour, plan(false));
+            assert_eq!(gray, plan(true));
+            // The queue is still asked for monochrome as the driver hint.
+            assert!(local_job(&p.spooler.settings, "Red".into(), p.local_scaling()).grayscale);
+            // A network printer's Color setting is the choice when that printer is chosen.
+            #[cfg(network_print)]
+            {
+                p.spooler.settings.grayscale = false;
+                p.destination = Destination::Network;
+                assert!(!p.grayscale());
+                p.net.state.draft.color = Some(craft_ui::printing::network::ColorMode::Monochrome);
+                assert!(p.grayscale());
+            }
+        }
+
+        #[test]
+        fn a_slide_or_custom_size_job_goes_on_the_queues_own_paper_shrunk_to_fit() {
+            let mut p = listed();
+            // The opening A4 is nobody's choice: no paper is demanded of the queue.
+            assert_eq!(p.local_scaling(), craft_print::Scaling::ShrinkToFit);
+            p.paper = None; // Frame size: a 13.33 x 7.50 in slide, an artboard
+            assert_eq!(p.local_scaling(), craft_print::Scaling::ShrinkToFit);
+            let job = local_job(&Settings { printer: "Front Desk".into(), ..Settings::default() }, "Deck".into(), p.local_scaling());
+            assert_eq!((job.scaling, job.printer.as_deref()), (craft_print::Scaling::ShrinkToFit, Some("Front Desk")));
+            assert!(job.options.is_empty(), "no paper option is sent for the job");
+        }
+
+        #[test]
+        fn a_paper_the_person_picked_is_demanded_exactly() {
+            let mut p = listed();
+            p.paper = Some(0);
+            p.paper_chosen = true;
+            assert_eq!(p.local_scaling(), craft_print::Scaling::Exact);
+            // ... but not once they go back to the frame's own size.
+            p.paper = None;
+            assert_eq!(p.local_scaling(), craft_print::Scaling::ShrinkToFit);
+        }
+
+        #[test]
+        fn the_job_the_spooler_gets_has_the_scaling_the_dialog_chose() {
+            GOT.lock().unwrap().clear();
+            let mut p = listed();
+            p.paper = None;
+            p.spooler.settings.grayscale = true;
+            let submit = spooler_submit("Slides".into(), p.local_scaling(), p.run_job);
+            let rx = submit(b"%PDF fake".to_vec(), p.spooler.settings.clone());
+            assert_eq!(rx.recv().unwrap(), Ok("fake".into()));
+            let got = GOT.lock().unwrap();
+            let (pdf, job) = got.last().expect("the spooler was handed the job");
+            assert_eq!(pdf, b"%PDF fake");
+            assert_eq!((job.scaling, job.grayscale, job.title.as_str()), (craft_print::Scaling::ShrinkToFit, true, "Slides"));
+            assert_eq!(job.printer.as_deref(), Some("Front Desk"));
+            drop(got);
+            finish_pending_jobs();
         }
     }
 }
