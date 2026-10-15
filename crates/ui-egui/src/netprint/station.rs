@@ -8,12 +8,6 @@
 //! raster) and the per-job options go through the registry.
 //!
 //! WS-Eventing push for WS-Print is opt-in: [`events_from_env`] reads `PDFCRAFT_TEST_EVENTS_BIND`.
-//!
-//! **Deny list.** `CRAFT_PRINT_DENY` (legacy `PDFCRAFT_PRINT_DENY`) names printers that are never opened. The
-//! registry and both backends enforce it for jobs; the two `*_info` reads below talk to the printer
-//! outside the registry, so this type checks the list itself: the typed address before anything is
-//! sent, and the name the printer reports before the answer is kept. A denied printer is
-//! [`ErrorKind::Denied`].
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -105,35 +99,13 @@ pub struct Station {
     events: bool,
     /// What the printer calls itself, once a query has read it; for the words shown to the person.
     display_name: std::sync::Mutex<String>,
-    /// The deny list (`CRAFT_PRINT_DENY`) as it was when the printer was opened.
-    denied: Vec<String>,
-}
-
-/// The refusal for a printer on the deny list: [`ErrorKind::Denied`], naming the variable and never the printer.
-fn denied_error() -> PrintError {
-    PrintError::new(
-        ErrorKind::Denied,
-        format!("the printer is on the deny list ({}); it was not opened and nothing was sent to it", craft_print::DENY_ENV),
-    )
-}
-
-/// Refuse when any of `texts` (an address, a name the printer reported) names a printer on `denied`.
-fn check_denied(denied: &[String], texts: &[&str]) -> Result<(), PrintError> {
-    if craft_print::any_denied(texts, denied) { Err(denied_error()) } else { Ok(()) }
 }
 
 impl Station {
     /// Open the printer at `address` (no connection is made). `events`: the opt-in WS-Eventing
     /// listener for a WS-Print printer (ignored for IPP, which polls).
     pub fn open(address: &str, transport: Option<Transport>, events: Option<NotifyConfig>) -> Result<Self, PrintError> {
-        Self::open_denying(address, transport, events, craft_print::deny_list())
-    }
-
-    /// [`Self::open`] with the deny list given instead of read from the environment (tests).
-    pub fn open_denying(address: &str, transport: Option<Transport>, events: Option<NotifyConfig>, denied: Vec<String>) -> Result<Self, PrintError> {
         let protocol = validate(address)?;
-        // By the typed address, before a backend or a transport exists.
-        check_denied(&denied, &[address])?;
         let transport = transport.unwrap_or_else(wsd::adapter::default_transport);
         let mut backend = WsdBackend::new().with_transport(Arc::clone(&transport));
         let with_events = events.is_some() && protocol == Protocol::Wsd;
@@ -145,9 +117,7 @@ impl Station {
             Protocol::Wsd => (backend.add(address)?, "wsd"),
             Protocol::Ipp => (ipp_backend.add(address)?, "ipp"),
         };
-        check_denied(&denied, &[&native])?;
         let registry = Registry::new();
-        registry.set_deny_list(Some(denied.clone()));
         registry.register(Box::new(backend.clone())).map_err(|e| PrintError::new(ErrorKind::Failed, e.to_string()))?;
         registry.register(Box::new(ipp_backend)).map_err(|e| PrintError::new(ErrorKind::Failed, e.to_string()))?;
         if let Some(converter) = registered_converter() {
@@ -162,7 +132,6 @@ impl Station {
             wsd: backend,
             events: with_events,
             display_name: std::sync::Mutex::default(),
-            denied,
         })
     }
 
@@ -215,23 +184,15 @@ impl Station {
 
     /// WS-Print: what the printer is and lists (`GetPrinterElements`). Sends no job.
     pub fn wsd_info(&self) -> Result<PrinterElements, PrintError> {
-        check_denied(&self.denied, &[&self.address])?;
         let url = PrinterUrl::parse(&self.address).map_err(PrintError::from)?;
         let elements = wsd::printer_info(&Client::new(Arc::clone(&self.transport), url)).map_err(|e| e.print_error(Op::Query))?;
-        // The name the printer reports is checked too; a denied answer is dropped.
-        check_denied(&self.denied, &[elements.description.as_ref().map_or("", |d| d.name.as_str())])?;
         Ok(elements)
     }
 
     /// IPP: the printer's attributes (`Get-Printer-Attributes`). Sends no job.
     pub fn ipp_info(&self) -> Result<PrinterAttrs, PrintError> {
-        check_denied(&self.denied, &[&self.address])?;
         let uri = PrinterUri::parse(&self.address).map_err(PrintError::from)?;
         let attrs = ipp::Client::new(Arc::clone(&self.transport), uri).get_printer_attributes(&[]).map_err(PrintError::from)?;
-        let names = [attrs.name.as_deref(), attrs.info.as_deref(), attrs.make_and_model.as_deref()];
-        for name in names.into_iter().flatten() {
-            check_denied(&self.denied, &[name])?;
-        }
         Ok(attrs)
     }
 
@@ -276,29 +237,6 @@ mod tests {
         let wsd = Station::open("http://127.0.0.1:3921/d/inkjet1/WebServices/PrinterService", None, None).expect("wsd");
         assert!(wsd.printer_id().starts_with("wsd:"));
         assert!(!wsd.events_enabled());
-    }
-
-    fn deny(entries: &str) -> Vec<String> {
-        craft_print::parse_deny_list(entries)
-    }
-
-    #[test]
-    fn a_denied_address_is_refused_at_open_and_nothing_is_sent() {
-        // The default transport would connect: a refusal that came after it would hang or fail differently.
-        for address in ["http://127.0.0.1:9/0f1e2d3c-1111-4222-8333-444455556666", "ipp://127.0.0.1:9/ipp/print/0f1e2d3c"] {
-            let error = Station::open_denying(address, None, None, deny("0F1E2D3C")).err().expect("denied");
-            assert_eq!(error.kind(), ErrorKind::Denied);
-            assert!(error.message().contains("CRAFT_PRINT_DENY") && !error.message().contains("0f1e"), "{error}");
-        }
-    }
-
-    #[test]
-    fn an_allowed_address_opens_and_the_reported_name_is_checked() {
-        let station = Station::open_denying("http://127.0.0.1:9/other", None, None, deny("brother;0f1e")).expect("allowed");
-        assert_eq!(station.address(), "http://127.0.0.1:9/other");
-        assert!(check_denied(&station.denied, &["Brother MFC-9330CDW"]).is_err(), "a reported name on the list is dropped");
-        assert!(check_denied(&station.denied, &["Office Laser", ""]).is_ok());
-        assert!(check_denied(&[], &["Brother MFC-9330CDW"]).is_ok());
     }
 
     #[test]
