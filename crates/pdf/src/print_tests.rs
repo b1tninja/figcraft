@@ -226,3 +226,35 @@ fn hostile_print_settings_still_export() {
         Err(PdfError::TooLarge(..))
     ));
 }
+
+#[test]
+fn fit_places_a_page_on_a_paper_sheet() {
+    let (d, f) = frame();
+    let a4 = (595.28, 841.89);
+    let fit = |orientation, scale| Fit { paper: a4, orientation, scale, margin: 18.0 };
+    let pdf = |fit| export_pdf(&d, &[f], &PdfOptions { fit: Some(fit), ..Default::default() }).unwrap();
+    // A 200 x 100 frame is wider than tall: Auto turns the sheet to landscape, and Shrink keeps its size.
+    let auto = pdf(fit(FitOrientation::Auto, FitScale::Shrink));
+    assert_eq!(pdf_box(&auto, "MediaBox"), Some([0.0, 0.0, a4.1, a4.0]));
+    // Portrait on request, whatever the page.
+    let portrait = pdf(fit(FitOrientation::Portrait, FitScale::Fill));
+    assert_eq!(pdf_box(&portrait, "MediaBox"), Some([0.0, 0.0, a4.0, a4.1]));
+    // Placement: Shrink never enlarges; Fill does; both centre the page.
+    let shrink = fit(FitOrientation::Portrait, FitScale::Shrink).place(200.0, 100.0).unwrap();
+    assert_eq!(shrink.scale, 1.0);
+    let fill = fit(FitOrientation::Portrait, FitScale::Fill).place(200.0, 100.0).unwrap();
+    assert!((fill.scale - (a4.0 - 36.0) / 200.0).abs() < 1e-9);
+    assert!((fill.offset.0 - 18.0).abs() < 1e-9, "centred across the sheet");
+    let big = fit(FitOrientation::Auto, FitScale::Shrink).place(4000.0, 2000.0).unwrap();
+    assert!(big.scale < 1.0 && (4000.0 * big.scale - (a4.1 - 36.0)).abs() < 1e-6);
+    // Hostile sizes place nothing.
+    for (w, h) in [(0.0, 10.0), (f64::NAN, 10.0), (10.0, f64::INFINITY), (-1.0, 5.0)] {
+        assert!(fit(FitOrientation::Auto, FitScale::Fill).place(w, h).is_none(), "{w} x {h}");
+    }
+    let nan = Fit { paper: (f64::NAN, 100.0), orientation: FitOrientation::Auto, scale: FitScale::Fill, margin: 0.0 };
+    assert!(nan.place(10.0, 10.0).is_none());
+    // Bleed asks for its own page size: Fit is left out.
+    let print = PrintSettings { bleed: 9.0, ..Default::default() };
+    let bled = export_pdf(&d, &[f], &PdfOptions { fit: Some(fit(FitOrientation::Portrait, FitScale::Fill)), print, ..Default::default() }).unwrap();
+    assert_eq!(pdf_box(&bled, "MediaBox"), Some([0.0, 0.0, 218.0, 118.0]));
+}

@@ -90,3 +90,31 @@ fn the_frames_pdf_takes_print_options() {
     assert_eq!(t.matches("/TrimBox[").count(), 2, "{t}");
     assert_eq!(t.matches("/BleedBox[").count(), 2, "{t}");
 }
+
+/// File > Print: the plan lays each frame on a paper sheet; the command only opens the dialog.
+#[test]
+fn print_plan_lays_frames_on_paper_and_the_command_opens_the_dialog() {
+    use crate::cmd::file::{print_plan, printable_frames};
+    use figcraft_pdf::{Fit, FitOrientation, FitScale};
+    let (mut s, f) = session();
+    let page = s.page().unwrap();
+    let doc = s.doc().unwrap();
+    assert_eq!(printable_frames(doc, page, None), vec![f]);
+    assert!(printable_frames(doc, page, Some(&[])).is_empty());
+    let a4 = Fit { paper: (595.28, 841.89), orientation: FitOrientation::Auto, scale: FitScale::Shrink, margin: 0.0 };
+    let plan = print_plan(doc, &[f], Some(a4)).unwrap();
+    assert!(plan.pdf.starts_with(b"%PDF"));
+    // 200 x 100 is landscape: the A4 sheet turns, the frame keeps its size and is centred.
+    let sheet = &plan.sheets[0];
+    assert_eq!(sheet.sheet, (841.89, 595.28));
+    assert_eq!(sheet.scale, 1.0);
+    assert!((sheet.offset.0 - (841.89 - 200.0) / 2.0).abs() < 1e-9);
+    // Without a paper the sheet is the frame.
+    let own = print_plan(doc, &[f], None).unwrap();
+    assert_eq!(own.sheets[0].sheet, (200.0, 100.0));
+    assert!(print_plan(doc, &[], None).is_err());
+    // The command opens the dialog and prints nothing.
+    let r = s.execute("file.print", &json!({})).unwrap();
+    assert_eq!(r["frames"], 1);
+    assert!(s.ui_requests.iter().any(|u| u.kind == "dialog.print"));
+}
