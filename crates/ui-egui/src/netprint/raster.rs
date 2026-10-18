@@ -18,6 +18,8 @@ use super::{ConvertContext, Document, DocumentConverter, DocumentFormat, Duplex,
 /// The most pixels all the sheets of one job may hold (3 bytes each in colour): a job larger than
 /// this at the chosen resolution is refused rather than exhausting memory.
 const MAX_PIXELS: u64 = 400_000_000;
+/// The most pixels a canvas side can have.
+const MAX_SIDE: u64 = 16_384;
 
 fn failed(why: impl Into<String>) -> PrintError {
     PrintError::new(ErrorKind::Failed, why)
@@ -55,6 +57,11 @@ impl DocumentConverter for FramesToRaster {
         let top = dx.max(dy);
         let gray = !context.colour;
         let bpp = if gray { 1 } else { 3 };
+        // The renderer's canvas has a side limit; a sheet past it would be cut short at the bottom or the
+        // right while the page header still claims the full size, so it is refused instead.
+        if let Some(index) = self.sheets.iter().position(|s| side_px(s.sheet.0, top) > MAX_SIDE || side_px(s.sheet.1, top) > MAX_SIDE) {
+            return Err(failed(format!("sheet {} is more than {MAX_SIDE} pixels on a side at {top} dpi: lower the resolution", index + 1)));
+        }
         let total: u64 = self.sheets.iter().map(|s| pixels(s.sheet, top)).sum();
         if total > MAX_PIXELS {
             return Err(failed(format!("the sheets are too large to render at {top} dpi: lower the resolution")));
@@ -84,17 +91,21 @@ impl DocumentConverter for FramesToRaster {
     }
 }
 
+/// One side of a sheet in pixels at `dpi`.
+fn side_px(points: f64, dpi: u32) -> u64 {
+    (points * f64::from(dpi) / 72.0).ceil().clamp(1.0, 1.0e6) as u64
+}
+
 /// The pixel count of a `sheet` (points) at `dpi`.
 fn pixels(sheet: (f64, f64), dpi: u32) -> u64 {
-    let side = |points: f64| (points * f64::from(dpi) / 72.0).ceil().clamp(1.0, 1.0e6) as u64;
-    side(sheet.0) * side(sheet.1)
+    side_px(sheet.0, dpi) * side_px(sheet.1, dpi)
 }
 
 /// One sheet at `dpi` on both axes: its frame rendered at the sheet's scale and laid on white, as
 /// 8-bit grey or RGB. `None` when the renderer refuses the size.
 fn render_sheet(doc: &Doc, sheet: &PrintSheet, dpi: u32, gray: bool) -> Option<(u32, u32, Vec<u8>)> {
     let per_point = f64::from(dpi) / 72.0;
-    let side = |points: f64| (points * per_point).ceil().clamp(1.0, 16_384.0) as usize;
+    let side = |points: f64| (points * per_point).ceil().clamp(1.0, MAX_SIDE as f64) as usize;
     let (w, h) = (side(sheet.sheet.0), side(sheet.sheet.1));
     let bpp = if gray { 1 } else { 3 };
     let mut canvas = vec![255u8; w.checked_mul(h)?.checked_mul(bpp)?];
@@ -145,6 +156,14 @@ fn resample(pixels: &[u8], bpp: usize, (sw, sh): (u32, u32), (tw, th): (u32, u32
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_sheet_with_a_side_past_the_canvas_limit_is_seen_before_it_is_cut() {
+        // A3 at 1200 dpi is 14 031 x 19 843 px: under the area limit, over the side limit.
+        assert!(super::side_px(1190.55, 1200) > super::MAX_SIDE);
+        assert!(super::pixels((841.89, 1190.55), 1200) < super::MAX_PIXELS);
+        assert!(super::side_px(595.28, 600) < super::MAX_SIDE, "A4 at 600 dpi fits");
+    }
+
     use super::*;
     use figcraft_color::Color;
     use figcraft_doc::{NodeId, NodeKind};
