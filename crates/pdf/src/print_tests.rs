@@ -201,6 +201,29 @@ fn soft_masks_stay_rgb_while_what_they_mask_prints_in_cmyk() {
 }
 
 #[test]
+fn grayscale_leaves_a_luminosity_mask_as_it_is_and_grays_what_it_masks() {
+    let (mut d, f) = frame();
+    let g = d.create(f, NodeKind::Group, "G", 0.0, 0.0, 100.0, 100.0).unwrap();
+    let m = d.create(g, NodeKind::Rectangle, "Mask", 0.0, 0.0, 100.0, 100.0).unwrap();
+    {
+        let n = d.get_mut(m).unwrap();
+        n.is_mask = true;
+        n.mask_type = figcraft_doc::MaskType::Luminance;
+        // Its luminosity is the opacity of what it masks: a gray of other weights would change it.
+        n.fills = vec![Paint::solid(Color::from_hex("00FF00").unwrap())];
+    }
+    let c = d.create(g, NodeKind::Rectangle, "Content", 0.0, 0.0, 100.0, 100.0).unwrap();
+    d.get_mut(c).unwrap().fills = vec![Paint::solid(Color::from_hex("0000FF").unwrap())];
+    let opts = |grayscale| PdfOptions { grayscale, ..Default::default() };
+    let colour = inflated(&export_pdf(&d, &[f], &opts(false)).unwrap());
+    let gray = inflated(&export_pdf(&d, &[f], &opts(true)).unwrap());
+    assert!(colour.contains("0 1 0 rg") && colour.contains("0 0 1 rg"), "{colour}");
+    // The mask's green is untouched (soft masks aren't printed); the content's blue is gray.
+    assert!(gray.contains("0 1 0 rg"), "{gray}");
+    assert!(!gray.contains("0 0 1 rg"), "{gray}");
+}
+
+#[test]
 fn hostile_print_settings_still_export() {
     let (d, f) = frame();
     for print in [

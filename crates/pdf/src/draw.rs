@@ -224,12 +224,12 @@ impl<'a> Exporter<'a> {
         }
     }
 
-    /// The colour model of what's drawn now: CMYK when printing in it, but never in soft masks
-    /// (they aren't printed).
+    /// The colour model of what's drawn now: CMYK or gray when printing in it, but never in soft
+    /// masks (they aren't printed, and a luminosity mask's colours are its opacity).
     pub(crate) fn ink(&self) -> Ink {
         if self.opts.print.cmyk && self.masking == 0 {
             Ink::Cmyk
-        } else if self.opts.grayscale {
+        } else if self.opts.grayscale && self.masking == 0 {
             Ink::Gray
         } else {
             Ink::Rgb
