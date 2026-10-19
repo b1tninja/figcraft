@@ -375,7 +375,7 @@ pub(crate) fn labels() -> Labels<'static> {
         high: tr("High"),
         photo: tr("Photo"),
         color: tr("Color:"),
-        color_color: tr("Colour"),
+        color_color: tr("Color"),
         color_monochrome: tr("Grayscale"),
         resolution: tr("Resolution:"),
         resolution_dpi: "{dpi} dpi",

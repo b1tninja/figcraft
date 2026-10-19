@@ -21,9 +21,9 @@ use egui::Context;
 use figcraft_pdf::{Fit, FitOrientation, FitScale};
 
 use crate::FigApp;
-use crate::i18n::tr;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::i18n::trf;
+use crate::i18n::{tr, tr_noop};
 
 /// The unprinted margin on every sheet, in points (a quarter inch: printers cannot print to the edge).
 pub const MARGIN: f64 = 18.0;
@@ -36,11 +36,12 @@ pub struct Paper {
     pub media: &'static str,
 }
 
-/// The sizes of the dialog (`name` is also the key in the catalogs).
+/// The sizes of the dialog (`name` is also the key in the catalogs; the ISO names read the same in
+/// every language).
 pub const PAPERS: &[Paper] = &[
-    Paper { name: "US Letter", short: 612.0, long: 792.0, media: "na_letter_8.5x11in" },
-    Paper { name: "US Legal", short: 612.0, long: 1008.0, media: "na_legal_8.5x14in" },
-    Paper { name: "Tabloid", short: 792.0, long: 1224.0, media: "na_ledger_11x17in" },
+    Paper { name: tr_noop("US Letter"), short: 612.0, long: 792.0, media: "na_letter_8.5x11in" },
+    Paper { name: tr_noop("US Legal"), short: 612.0, long: 1008.0, media: "na_legal_8.5x14in" },
+    Paper { name: tr_noop("Tabloid"), short: 792.0, long: 1224.0, media: "na_ledger_11x17in" },
     Paper { name: "A3", short: 841.89, long: 1190.55, media: "iso_a3_297x420mm" },
     Paper { name: "A4", short: 595.28, long: 841.89, media: "iso_a4_210x297mm" },
     Paper { name: "A5", short: 419.53, long: 595.28, media: "iso_a5_148x210mm" },
@@ -93,7 +94,7 @@ pub struct KnownPrinter {
 
 /// Hands a print-ready PDF to a queue and says what the spooler answered.
 #[cfg(not(target_arch = "wasm32"))]
-pub type RunJob = fn(&[u8], &craft_print::Job) -> Result<String, String>;
+pub type RunJob = std::sync::Arc<dyn Fn(&[u8], &craft_print::Job) -> Result<String, String> + Send + Sync>;
 
 /// The Print dialog's state.
 pub struct PrintUi {
@@ -143,7 +144,7 @@ impl Default for PrintUi {
             #[cfg(not(target_arch = "wasm32"))]
             discover: spooler_discover(),
             #[cfg(not(target_arch = "wasm32"))]
-            run_job: spooler_run,
+            run_job: std::sync::Arc::new(spooler_run),
             #[cfg(not(target_arch = "wasm32"))]
             listed: false,
             #[cfg(network_print)]
@@ -164,6 +165,19 @@ impl PrintUi {
     /// The media name of the chosen paper, for printers that list it.
     pub fn media(&self) -> Option<&'static str> {
         self.paper.and_then(|i| PAPERS.get(i)).map(|p| p.media)
+    }
+
+    /// The media a network job names, for sheets of these sizes (points): the paper the person picked;
+    /// with "Frame size", the sheets' own size when every sheet is the same paper of the dialog (either
+    /// way up). The opening A4 nobody chose names none, as a local queue is demanded none
+    /// ([`Self::local_scaling`]), and neither does a job of mixed sizes.
+    pub fn network_media(&self, sheets: &[(f64, f64)]) -> Option<&'static str> {
+        if self.paper.is_some() {
+            return if self.paper_chosen { self.media() } else { None };
+        }
+        let mut media = sheets.iter().map(|&(w, h)| media_for_points(w, h));
+        let first = media.next()??;
+        media.all(|m| m == Some(first)).then_some(first)
     }
 
     /// Whether the job comes out gray: the local queue's Grayscale box, or the network printer's Color
@@ -277,6 +291,13 @@ impl PrintUi {
 /// The media name of a sheet size name of the dialog (the catalog key), for the sizes printers list.
 pub fn media_for_paper(name: &str) -> Option<&'static str> {
     PAPERS.iter().find(|p| p.name == name).map(|p| p.media)
+}
+
+/// The media name of a sheet of `width` x `height` points, either way up, when it is one of the
+/// dialog's papers (within 3 pt).
+pub fn media_for_points(width: f64, height: f64) -> Option<&'static str> {
+    let (short, long) = if width <= height { (width, height) } else { (height, width) };
+    PAPERS.iter().find(|p| (short - p.short).abs() <= 3.0 && (long - p.long).abs() <= 3.0).map(|p| p.media)
 }
 
 /// What the dialog would print: the frames and how many sheets they make.
@@ -558,8 +579,10 @@ fn send(app: &mut FigApp, ctx: &Context) {
     };
     let name = doc.name.clone();
     match app.ui.print.destination {
+        // Submitting starts the spooler's worker: never while a job is still being sent.
+        Destination::System if app.ui.print.spooler.busy() => app.toast(tr("A print job is already being sent.")),
         Destination::System => {
-            let submit = spooler_submit(name, app.ui.print.local_scaling(), app.ui.print.run_job);
+            let submit = spooler_submit(name, app.ui.print.local_scaling(), app.ui.print.run_job.clone());
             let settings = app.ui.print.spooler.settings.clone();
             if app.ui.print.spooler.begin(submit(plan.pdf, settings)).is_err() {
                 app.toast(tr("A print job is already being sent."));
@@ -567,7 +590,8 @@ fn send(app: &mut FigApp, ctx: &Context) {
         }
         #[cfg(network_print)]
         Destination::Network => {
-            let media = app.ui.print.media();
+            let sheets: Vec<(f64, f64)> = plan.sheets.iter().map(|s| s.sheet).collect();
+            let media = app.ui.print.network_media(&sheets);
             if !app.ui.print.net.send(Some(ctx.clone()), &name, doc, plan, media) {
                 app.toast(tr("Query the printer, then tick the confirmation box before sending."));
             }
@@ -622,7 +646,7 @@ fn spooler_run(pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
 fn spooler_submit(title: String, scaling: craft_print::Scaling, run: RunJob) -> craft_ui::printing::Submit {
     Box::new(move |pdf, settings| {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let title = title.clone();
+        let (title, run) = (title.clone(), std::sync::Arc::clone(&run));
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
             let job = local_job(&settings, title, scaling);
             let _ = sender.send(run(&pdf, &job));
@@ -680,6 +704,14 @@ mod tests {
     }
 
     #[test]
+    fn paper_names_in_words_are_catalog_keys() {
+        for p in PAPERS {
+            let iso = p.name.len() == 2 && p.name.starts_with('A');
+            assert!(iso || crate::i18n::try_tr(p.name).is_some(), "{} is in no catalog", p.name);
+        }
+    }
+
+    #[test]
     fn every_paper_is_portrait_and_names_a_media() {
         for p in PAPERS {
             assert!(p.short < p.long, "{}", p.name);
@@ -691,7 +723,7 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     mod dialog {
-        use std::sync::Mutex;
+        use std::sync::{Arc, Mutex};
 
         use super::*;
         use crate::layers_drag_tests::Ui;
@@ -708,16 +740,23 @@ mod tests {
             })
         }
 
-        /// What the fake spooler was handed.
-        static GOT: Mutex<Vec<(Vec<u8>, craft_print::Job)>> = Mutex::new(Vec::new());
+        /// What a test's fake spooler was handed: each test has its own, so tests running in parallel
+        /// never see each other's jobs.
+        type Got = Arc<Mutex<Vec<(Vec<u8>, craft_print::Job)>>>;
 
-        fn fake_run(pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
-            GOT.lock().unwrap().push((pdf.to_vec(), job.clone()));
-            Ok("fake".into())
+        /// A fake spooler that records what it is handed, and the record.
+        fn recorder() -> (RunJob, Got) {
+            let got: Got = Arc::default();
+            let sink = Arc::clone(&got);
+            let run: RunJob = Arc::new(move |pdf: &[u8], job: &craft_print::Job| {
+                sink.lock().unwrap().push((pdf.to_vec(), job.clone()));
+                Ok("fake".into())
+            });
+            (run, got)
         }
 
         fn listed() -> PrintUi {
-            let mut p = PrintUi { discover: fake_queues(), run_job: fake_run, ..PrintUi::default() };
+            let mut p = PrintUi { discover: fake_queues(), run_job: recorder().0, ..PrintUi::default() };
             p.spooler.refresh(&p.discover);
             p.spooler.poll(&egui::Context::default());
             p.listed = true;
@@ -731,7 +770,7 @@ mod tests {
         fn open_dialog() -> Ui {
             let mut u = Ui::new(Session::empty());
             u.app.ui.print.discover = fake_queues();
-            u.app.ui.print.run_job = fake_run;
+            u.app.ui.print.run_job = recorder().0;
             u.app.ui.print.open = true;
             u.frame(vec![]);
             u.frame(vec![]);
@@ -830,7 +869,7 @@ mod tests {
             #[cfg(network_print)]
             {
                 let labels = crate::network_glue::labels();
-                assert_eq!(labels.color_monochrome, "Grayscale");
+                assert_eq!((labels.color_color, labels.color_monochrome), ("Color", "Grayscale"), "the interface's US spelling");
                 assert_eq!(labels.unsupported_color, "This printer only prints in grayscale.");
             }
             // A red frame.
@@ -886,14 +925,14 @@ mod tests {
 
         #[test]
         fn the_job_the_spooler_gets_has_the_scaling_the_dialog_chose() {
-            GOT.lock().unwrap().clear();
-            let mut p = listed();
+            let (run, got) = recorder();
+            let mut p = PrintUi { run_job: run, ..listed() };
             p.paper = None;
             p.spooler.settings.grayscale = true;
-            let submit = spooler_submit("Slides".into(), p.local_scaling(), p.run_job);
+            let submit = spooler_submit("Slides".into(), p.local_scaling(), p.run_job.clone());
             let rx = submit(b"%PDF fake".to_vec(), p.spooler.settings.clone());
             assert_eq!(rx.recv().unwrap(), Ok("fake".into()));
-            let got = GOT.lock().unwrap();
+            let got = got.lock().unwrap();
             let (pdf, job) = got.last().expect("the spooler was handed the job");
             assert_eq!(pdf, b"%PDF fake");
             assert_eq!((job.scaling, job.grayscale, job.title.as_str()), (craft_print::Scaling::ShrinkToFit, true, "Slides"));
@@ -924,17 +963,18 @@ mod tests {
             let Some((doc, frame)) = linked_doc() else { return };
             let mut p = listed();
             for (paper, chosen) in [(None, false), (Some(0), true)] {
-                GOT.lock().unwrap().clear();
+                let (run, got) = recorder();
+                p.run_job = run;
                 p.paper = paper;
                 p.paper_chosen = chosen;
                 for gray in [false, true] {
                     p.spooler.settings.grayscale = gray;
                     let pdf = figcraft_engine::cmd::file::print_plan(&doc, &[frame], p.fit(), p.grayscale()).unwrap().pdf;
-                    let submit = spooler_submit("Links".into(), p.local_scaling(), p.run_job);
+                    let submit = spooler_submit("Links".into(), p.local_scaling(), p.run_job.clone());
                     assert_eq!(submit(pdf, p.spooler.settings.clone()).recv().unwrap(), Ok("fake".into()));
                 }
                 finish_pending_jobs();
-                let got = GOT.lock().unwrap();
+                let got = got.lock().unwrap();
                 assert_eq!(got.len(), 2);
                 for (pdf, _) in got.iter() {
                     let s = String::from_utf8_lossy(pdf);
@@ -944,6 +984,104 @@ mod tests {
                     }
                 }
             }
+        }
+
+        /// The app with a document of one frame per size, side by side, and the dialog's queues listed.
+        fn app_with_frames(sizes: &[(f64, f64)]) -> Ui {
+            let mut doc = figcraft_doc::Document::new("Sheets");
+            let page = doc.first_page().unwrap();
+            let mut x = 0.0;
+            for &(w, h) in sizes {
+                doc.create(page, figcraft_doc::NodeKind::Frame, "F", x, 0.0, w, h).unwrap();
+                x += w + 100.0;
+            }
+            let mut u = Ui::new(Session::with_document(doc));
+            u.app.ui.print = listed();
+            u
+        }
+
+        #[test]
+        fn print_while_a_job_is_being_sent_hands_the_spooler_nothing() {
+            let mut u = app_with_frames(&[(200.0, 100.0)]);
+            let ctx = u.ctx.clone();
+            let (run, got) = recorder();
+            u.app.ui.print.run_job = run;
+            // A job is on its way to the spooler.
+            let (sending, receiver) = std::sync::mpsc::channel();
+            assert!(u.app.ui.print.spooler.begin(receiver).is_ok() && u.app.ui.print.spooler.busy());
+            send(&mut u.app, &ctx);
+            finish_pending_jobs();
+            assert!(got.lock().unwrap().is_empty(), "a second job reached the spooler while the first was being sent");
+            assert_eq!(u.app.ui.toast.as_ref().map(|(text, _)| text.as_str()), Some("A print job is already being sent."));
+            // Once that job is done, Print sends.
+            sending.send(Ok("first".into())).unwrap();
+            u.app.ui.print.spooler.poll(&ctx);
+            assert!(!u.app.ui.print.spooler.busy());
+            send(&mut u.app, &ctx);
+            finish_pending_jobs();
+            assert_eq!(got.lock().unwrap().len(), 1);
+        }
+
+        /// The media a network printer (in memory) is asked for when the frames of `sizes` are printed
+        /// with this paper choice.
+        #[cfg(network_print)]
+        fn network_media_sent(sizes: &[(f64, f64)], paper: Option<usize>, chosen: bool) -> Option<String> {
+            use craft_print::wsd::testing::{FakeConfig, FakePrinter, MemTransport};
+            let mut u = app_with_frames(sizes);
+            let ctx = u.ctx.clone();
+            let media = vec!["iso_a4_210x297mm", "na_letter_8.5x11in", "na_legal_8.5x14in"];
+            let printer = FakePrinter::new(FakeConfig { media, ..FakeConfig::default() });
+            let p = &mut u.app.ui.print;
+            (p.paper, p.paper_chosen) = (paper, chosen);
+            p.net.set_transport(Arc::new(MemTransport(printer.clone())));
+            p.net.state.draft = craft_ui::printing::network::Draft::for_address("127.0.0.1:5357/printer");
+            p.choose(&Entry::Network, &ctx);
+            assert!(p.net.query_now(&ctx));
+            let settle = |p: &mut PrintUi, busy: fn(&PrintUi) -> bool| {
+                for _ in 0..400 {
+                    p.net.state.poll(&ctx);
+                    if !busy(p) {
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                panic!("timed out");
+            };
+            settle(p, |p| p.net.state.draft.querying());
+            p.net.state.draft.confirmed = true;
+            send(&mut u.app, &ctx);
+            settle(&mut u.app.ui.print, |p| p.net.state.draft.running());
+            let ticket = printer.job(1).expect("the printer got the job").ticket;
+            let (_, rest) = ticket.split_once("<wprt:MediaSizeName")?;
+            let (_, rest) = rest.split_once('>')?;
+            rest.split_once('<').map(|(media, _)| media.to_owned())
+        }
+
+        #[cfg(network_print)]
+        #[test]
+        fn a_network_job_names_a_paper_only_when_the_person_chose_it_or_every_frame_is_one() {
+            let letter = (612.0, 792.0);
+            // The opening A4 is nobody's choice: the printer keeps its own paper, as a local queue does.
+            assert_eq!(network_media_sent(&[letter], Some(A4), false), None);
+            assert_eq!(network_media_sent(&[letter], Some(A4), true).as_deref(), Some("iso_a4_210x297mm"));
+            assert_eq!(network_media_sent(&[letter], Some(1), true).as_deref(), Some("na_legal_8.5x14in"));
+            // Frame size: the frames' own paper when they all are one (either way up), else none.
+            assert_eq!(network_media_sent(&[letter, letter], None, true).as_deref(), Some("na_letter_8.5x11in"));
+            assert_eq!(network_media_sent(&[letter, (792.0, 612.0)], None, true).as_deref(), Some("na_letter_8.5x11in"));
+            assert_eq!(network_media_sent(&[letter, (595.28, 841.89)], None, true), None);
+            assert_eq!(network_media_sent(&[(500.0, 500.0)], None, true), None);
+        }
+
+        #[test]
+        fn sheet_sizes_map_to_the_dialogs_papers_either_way_up() {
+            assert_eq!(media_for_points(612.0, 792.0), Some("na_letter_8.5x11in"));
+            assert_eq!(media_for_points(1224.0, 792.0), Some("na_ledger_11x17in"));
+            assert_eq!(media_for_points(596.0, 842.0), Some("iso_a4_210x297mm"));
+            assert_eq!(media_for_points(600.0, 800.0), None);
+            let mut p = PrintUi { paper: None, ..PrintUi::default() };
+            assert_eq!(p.network_media(&[]), None);
+            p.paper = Some(A4);
+            assert_eq!(p.network_media(&[(612.0, 792.0)]), None, "the opening A4 is not a choice");
         }
     }
 }

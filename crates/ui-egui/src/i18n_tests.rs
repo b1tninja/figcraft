@@ -281,6 +281,16 @@ fn english_text_is_its_key_except_plurals() {
 }
 
 #[test]
+fn an_ellipsis_follows_its_word_without_a_space() {
+    for lang in LANGS {
+        let texts = lang.ui.iter().flat_map(|(_, t)| forms(t)).chain(lang.commands.iter().chain(lang.menu).flat_map(|(_, t)| forms(t)));
+        for s in texts {
+            assert!(!s.contains(" …"), "{}: {s:?} has a space before its \"…\"", lang.code);
+        }
+    }
+}
+
+#[test]
 fn catalogs_have_known_keys_and_matching_placeholders() {
     let en = english();
     let ids: BTreeSet<&str> = figcraft_engine::all_commands()

@@ -43,6 +43,9 @@ queried in this session (by the name each reported, kept for the session only, n
   - A printer that lists PDF gets the PDF as it is. One that lists only PWG raster gets the same frames
     rendered with FigCraft's renderer (`netprint/raster.rs`) at the resolution it lists nearest 300 dpi. One
     that lists neither blocks Print.
+  - The job names a paper (when the printer lists it) only when the person picked one, or, with *Frame
+    size*, when every sheet is the same paper of the dialog either way up; the opening A4 and mixed sizes
+    name none, so the printer uses its own, as a queue of this computer does.
   - One press of Print is one tracked craft-print `PrintJob`: accepted, followed to its end, retried only by
     the person (Retry), reconciled against the printer's job lists (reads only) when the outcome is unknown.
     Every status line names the printer by what it reported about itself, never by its address.
