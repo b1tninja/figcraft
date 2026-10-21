@@ -608,7 +608,10 @@ fn spooler_discover() -> craft_ui::printing::Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers().into_iter().map(|p| craft_ui::printing::Printer { name: p.name, default: p.default }).collect();
+            let printers = craft_print::printers()
+                .into_iter()
+                .map(|p| craft_ui::printing::Printer { name: p.name, label: p.description, default: p.default })
+                .collect();
             let _ = sender.send(printers);
         });
         receiver
@@ -735,7 +738,10 @@ mod tests {
         fn fake_queues() -> Discover {
             Box::new(|| {
                 let (tx, rx) = std::sync::mpsc::channel();
-                let _ = tx.send(vec![Printer { name: "Office Laser".into(), default: false }, Printer { name: "Front Desk".into(), default: true }]);
+                let _ = tx.send(vec![
+                    Printer { name: "Office Laser".into(), label: String::new(), default: false },
+                    Printer { name: "Front Desk".into(), label: String::new(), default: true },
+                ]);
                 rx
             })
         }

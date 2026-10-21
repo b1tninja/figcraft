@@ -1,8 +1,8 @@
 # Parity checklist
 
-> **Generated:** 2026-10-17 by `cargo xtask parity`. Do not edit by hand.
+> **Generated:** 2026-10-20 by `cargo xtask parity`. Do not edit by hand.
 
-FigCraft commands registered for the incumbent's main menu and toolbar (562 commands in the engine).
+FigCraft commands registered for the incumbent's main menu and toolbar (570 commands in the engine).
 
 **213 / 213 menu items (100.0%)**
 
