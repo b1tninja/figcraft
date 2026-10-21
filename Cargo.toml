@@ -41,6 +41,9 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0",
 # (craft-libs#116, which carries the craft-wsd core and craft-job). The `wsd` and `ipp` backends are chosen
 # by figcraft-ui-egui's `network-print` feature; a build without it prints through the spooler only.
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "refs/pull/116/head", default-features = false }
+# Who draws the window frame on Linux — the compositor or the app — so every Craft app shows the
+# same native titlebar per desktop (craft-libs). The `egui` feature adds `decorate`/`decorations`.
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "1f805378d454dac48b5c214029d254055fdf961b", features = ["egui"] }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
