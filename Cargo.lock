@@ -743,6 +743,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -898,12 +907,12 @@ source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09
 [[package]]
 name = "craft-job"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#6772aaa6e353739215ff7e5e81f7453e307ddd21"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#11b41c2dbaaa95902a2c44eac41f871aca7b9f32"
 
 [[package]]
 name = "craft-print"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#6772aaa6e353739215ff7e5e81f7453e307ddd21"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#11b41c2dbaaa95902a2c44eac41f871aca7b9f32"
 dependencies = [
  "craft-job",
  "craft-winprint-gdi",
@@ -918,7 +927,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#6cf583fa7c8e9db4d7be143d9de02c56b842822f"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F112%2Fhead#def43239d2f412cfdb3a29e281afa34adabf3188"
 dependencies = [
  "egui",
 ]
@@ -943,7 +952,7 @@ dependencies = [
 [[package]]
 name = "craft-wsd"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#6772aaa6e353739215ff7e5e81f7453e307ddd21"
+source = "git+https://github.com/storytold/craft-libs?rev=refs%2Fpull%2F116%2Fhead#11b41c2dbaaa95902a2c44eac41f871aca7b9f32"
 dependencies = [
  "roxmltree 0.20.0",
  "thiserror 2.0.21",
@@ -1502,7 +1511,7 @@ checksum = "b97b65636e5b9ef369943878ac74335ba1c55c1cb6adbf1e2c293c624248d693"
 
 [[package]]
 name = "figcraft"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "arboard",
  "craft-window",
@@ -1528,7 +1537,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-cli"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-engine",
@@ -1542,9 +1551,10 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "figcraft-color",
  "figcraft-doc",
  "figcraft-geom",
@@ -1557,7 +1567,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-collab-net"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab",
@@ -1580,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-color"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "kurbo",
  "serde",
@@ -1589,7 +1599,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-doc"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-color",
  "figcraft-geom",
@@ -1601,7 +1611,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-engine"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "craft-docpath",
@@ -1629,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-format"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-pathops",
@@ -1644,7 +1654,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-geom"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "kurbo",
  "serde",
@@ -1652,7 +1662,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-layout"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -1660,7 +1670,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-mcp"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-collab-net",
@@ -1676,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pathops"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -1685,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-pdf"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-color",
  "figcraft-doc",
@@ -1702,7 +1712,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-plugin"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-color",
  "serde",
@@ -1715,7 +1725,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-render"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "crc32fast",
  "figcraft-color",
@@ -1733,7 +1743,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-server"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "crc32fast",
  "ctrlc",
@@ -1757,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-svg"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
  "figcraft-color",
@@ -1773,7 +1783,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-text"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-doc",
  "figcraft-geom",
@@ -1787,9 +1797,10 @@ dependencies = [
 
 [[package]]
 name = "figcraft-ui-egui"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "base64 0.22.1",
+ "chrono",
  "craft-print",
  "craft-ui",
  "egui",
@@ -1815,7 +1826,7 @@ dependencies = [
 
 [[package]]
 name = "figcraft-web"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "eframe",
  "egui",
@@ -4935,9 +4946,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "ureq"
-version = "3.4.2"
+version = "3.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a7ac20be9b7726e0bbdbf974c059676d9acb1cd414961f570a4e8231cacd7fc"
+checksum = "cde93ff05758a36a851a398a772b0b79a82fbe3c186a46f2696baaeaf84c966b"
 dependencies = [
  "base64 0.23.1",
  "log",
@@ -6062,7 +6073,7 @@ checksum = "9440ea3e5aeabb0ac63af70daf835274065238cdd0cec83418f417eae38bacee"
 
 [[package]]
 name = "xtask"
-version = "0.8.0"
+version = "0.10.0"
 dependencies = [
  "figcraft-engine",
  "serde_json",
