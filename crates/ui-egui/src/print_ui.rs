@@ -647,6 +647,12 @@ fn spooler_run(pdf: &[u8], job: &craft_print::Job) -> Result<String, String> {
 /// [`finish_pending_jobs`]: dropping the handle at exit could kill the spooler hand-over half way.
 #[cfg(not(target_arch = "wasm32"))]
 fn spooler_submit(title: String, scaling: craft_print::Scaling, run: RunJob) -> craft_ui::printing::Submit {
+    spooler_submit_to(&JOBS, title, scaling, run)
+}
+
+/// [`spooler_submit`] keeping its workers in `jobs` (a test keeps its own list).
+#[cfg(not(target_arch = "wasm32"))]
+fn spooler_submit_to(jobs: &'static Jobs, title: String, scaling: craft_print::Scaling, run: RunJob) -> craft_ui::printing::Submit {
     Box::new(move |pdf, settings| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let (title, run) = (title.clone(), std::sync::Arc::clone(&run));
@@ -655,26 +661,77 @@ fn spooler_submit(title: String, scaling: craft_print::Scaling, run: RunJob) -> 
             let _ = sender.send(run(&pdf, &job));
         });
         if let Ok(worker) = worker {
-            let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            jobs.retain(|j| !j.is_finished());
-            jobs.push(worker);
+            let mut kept = jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            kept.retain(|j| !j.is_finished());
+            kept.push(worker);
         }
         receiver
     })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-static JOBS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
+type Jobs = std::sync::Mutex<Vec<std::thread::JoinHandle<()>>>;
 
-/// Wait for the print jobs being handed to the spooler (call before the process exits).
+#[cfg(not(target_arch = "wasm32"))]
+static JOBS: Jobs = std::sync::Mutex::new(Vec::new());
+
+/// How long closing the app waits for print jobs still being handed to the spooler. A normal
+/// hand-over (writing the PDF to the Windows spooler or CUPS) takes a few seconds, a large job or a
+/// slow driver more; 25 s leaves room for those without leaving a window-less process behind for
+/// longer than half a minute when a driver or the spooler has stalled.
+#[cfg(not(target_arch = "wasm32"))]
+pub const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(25);
+
+/// Wait for the print jobs being handed to the spooler (call before the process exits), at most
+/// [`SHUTDOWN_DEADLINE`].
 #[cfg(not(target_arch = "wasm32"))]
 pub fn finish_pending_jobs() {
-    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-    for worker in workers {
-        if worker.join().is_err() {
-            log::error!("the print worker stopped unexpectedly during shutdown");
+    finish_pending_jobs_within(SHUTDOWN_DEADLINE);
+}
+
+/// Like [`finish_pending_jobs`], giving up after `deadline` in total (it never blocks past it).
+/// Workers that finish in time are joined; the others are left running (the process is about to
+/// exit) and logged: whether their job reached the queue is unknown.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn finish_pending_jobs_within(deadline: std::time::Duration) {
+    finish_jobs_within(&JOBS, deadline);
+}
+
+/// What [`finish_jobs_within`] did with the workers: joined, and still running at the deadline.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, PartialEq, Eq)]
+struct Finished {
+    joined: usize,
+    abandoned: usize,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn finish_jobs_within(jobs: &Jobs, deadline: std::time::Duration) -> Finished {
+    let start = std::time::Instant::now();
+    let mut running = std::mem::take(&mut *jobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let mut joined = 0;
+    loop {
+        // Only a finished worker is joined, so this never blocks.
+        let (done, still): (Vec<_>, Vec<_>) = running.into_iter().partition(|w| w.is_finished());
+        running = still;
+        for worker in done {
+            joined += 1;
+            if worker.join().is_err() {
+                log::error!("the print worker stopped unexpectedly during shutdown");
+            }
         }
+        let Some(left) = deadline.checked_sub(start.elapsed()).filter(|_| !running.is_empty()) else { break };
+        std::thread::sleep(left.min(std::time::Duration::from_millis(10)));
     }
+    if !running.is_empty() {
+        log::warn!(
+            "{} print job(s) were still being handed to the system when FigCraft closed ({:.0} s passed); \
+             they may or may not have reached the print queue, so check the queue before printing again",
+            running.len(),
+            deadline.as_secs_f32()
+        );
+    }
+    Finished { joined, abandoned: running.len() }
 }
 
 #[cfg(test)]
@@ -945,6 +1002,50 @@ mod tests {
             assert_eq!(job.printer.as_deref(), Some("Front Desk"));
             drop(got);
             finish_pending_jobs();
+        }
+
+        static STALLED: Jobs = Mutex::new(Vec::new());
+
+        #[test]
+        fn closing_the_app_does_not_wait_for_a_stalled_spooler_but_still_collects_finished_hand_overs() {
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst};
+            let handed = Arc::new(AtomicUsize::new(0));
+            let exited = Arc::new(AtomicBool::new(false));
+            let (release, held) = std::sync::mpsc::channel::<()>();
+            let held = Mutex::new(held);
+            let (count, flag) = (Arc::clone(&handed), Arc::clone(&exited));
+            // One job blocks (submitted first, so the next submit keeps it listed); the other completes inside the spooler call until released.
+            let run: RunJob = Arc::new(move |pdf: &[u8], _job: &craft_print::Job| {
+                if pdf == b"stall" {
+                    let _ = held.lock().unwrap().recv();
+                    flag.store(true, SeqCst);
+                } else {
+                    count.fetch_add(1, SeqCst);
+                }
+                Ok("fake".into())
+            });
+            let submit = spooler_submit_to(&STALLED, "Job".into(), craft_print::Scaling::ShrinkToFit, run);
+            let settings = listed().spooler.settings.clone();
+            let _stalled = submit(b"stall".to_vec(), settings.clone());
+            assert_eq!(submit(b"%PDF ok".to_vec(), settings).recv().unwrap(), Ok("fake".into()));
+            assert_eq!(STALLED.lock().unwrap().len(), 2);
+
+            let deadline = std::time::Duration::from_millis(300);
+            let start = std::time::Instant::now();
+            let done = finish_jobs_within(&STALLED, deadline);
+            let took = start.elapsed();
+            assert!(took < deadline + std::time::Duration::from_secs(5), "waited on a stalled spooler: {took:?}");
+            assert_eq!(done, Finished { joined: 1, abandoned: 1 }, "the finished hand-over is collected, the stalled one left");
+            assert_eq!(handed.load(SeqCst), 1);
+            assert!(STALLED.lock().unwrap().is_empty());
+
+            // Let the stalled worker go so no thread outlives the test.
+            release.send(()).unwrap();
+            let start = std::time::Instant::now();
+            while !exited.load(SeqCst) && start.elapsed() < std::time::Duration::from_secs(5) {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            assert!(exited.load(SeqCst), "the released worker did not finish");
         }
 
         /// A frame with one hyperlinked word (`None` without a font on this machine).

@@ -28,7 +28,10 @@ queried in this session (by the name each reported, kept for the session only, n
 - **A queue of this computer**: the spooler (Windows spooler, CUPS) through craft-print. Copies, two-sided and
   Grayscale are craft-print `Job` settings. The job asks for the paper exactly only when the person picked a
   paper in the dialog; otherwise (frame size, or the opening A4) it goes on the queue's own paper, shrunk to fit
-  (`Scaling::ShrinkToFit`), so a queue without a 13.33 x 7.50 in paper does not refuse it.
+  (`Scaling::ShrinkToFit`), so a queue without a 13.33 x 7.50 in paper does not refuse it. Closing the app
+  gives a hand-over still in progress up to 25 s (`SHUTDOWN_DEADLINE`) to finish; after that the app exits
+  anyway and logs a warning that the job may or may not have reached the queue (check the print queue), so a
+  stalled driver or spooler cannot leave a window-less process behind.
 - **Grayscale** (the queue's checkbox, or the network printer's Color setting) is honest: the PDF is written gray
   (`PdfOptions::grayscale`, Rec. 709 weights; the raster path uses the same weights) and the driver is also
   asked for monochrome (`Job::grayscale`), so a driver that ignores the hint still prints gray.
