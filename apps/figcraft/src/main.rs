@@ -170,21 +170,23 @@ fn main() -> eframe::Result {
     // System fonts: index them in the background, then wake the UI (an idle window draws no frames)
     // to lay text out again with them.
     let ctx_slot: Arc<Mutex<Option<egui::Context>>> = Arc::new(Mutex::new(None));
-    let fonts_slot = ctx_slot.clone();
+    // Wakes the window (once it is there) from another thread.
+    let wake = |slot: &Arc<Mutex<Option<egui::Context>>>| {
+        let slot = slot.clone();
+        move || {
+            if let Some(c) = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+                c.request_repaint();
+            }
+        }
+    };
+    let fonts_wake = wake(&ctx_slot);
     std::thread::spawn(move || {
         figcraft_text::scan_system_fonts();
-        if let Some(c) = fonts_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-            c.request_repaint();
-        }
+        fonts_wake();
     });
     let mut session = Session::empty();
     // Live sessions: the network threads wake the window when something arrives.
-    let wake_slot = ctx_slot.clone();
-    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(move || {
-        if let Some(c) = wake_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-            c.request_repaint();
-        }
-    }))));
+    session.live.install(Box::new(figcraft_collab_net::NetLink::new(Arc::new(wake(&ctx_slot)))));
     for f in &args.files {
         if let Err(e) = session.execute("file.open", &json!({"path": f})) {
             log::error!("{f}: {e}");
@@ -196,6 +198,7 @@ fn main() -> eframe::Result {
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
     let svc = services::Desktop::load(recovery.clone());
+    svc.follow_system_dark(wake(&ctx_slot));
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;
     }
@@ -266,14 +269,15 @@ fn main() -> eframe::Result {
     let result = eframe::run_native(
         "FigCraft",
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            with_app(|fig| fig.services.set_egui_context(&cc.egui_ctx));
             Ok(Box::new(App {
                 queue,
                 ctx_slot,
                 title: String::new(),
                 recovery,
                 #[cfg(target_os = "macos")]
-                apple_events: apple_events.connect(&_cc.egui_ctx),
+                apple_events: apple_events.connect(&cc.egui_ctx),
             }))
         }),
     );

@@ -233,6 +233,20 @@ fn not_sharing_the_popover_offers_one_way_to_start_and_one_to_join() {
 }
 
 #[test]
+fn the_server_key_shows_as_dots_while_shown_and_typed() {
+    let (mut h, _) = harness();
+    let shapes = open(&mut h);
+    click(&mut h, &shapes, "Advanced");
+    h.app.ui.live.share_key = "s3cret-key".into();
+    let shapes = h.frames(2);
+    let dots = "•".repeat(10);
+    assert!(has_text(&shapes, &dots) && !has_text(&shapes, "s3cret-key"));
+    // Editing it keeps it hidden.
+    let shapes = click(&mut h, &shapes, &dots);
+    assert!(!has_text(&shapes, "s3cret-key"));
+}
+
+#[test]
 fn sharing_online_shows_the_code_copies_it_and_stops() {
     let (mut h, script) = harness();
     let shapes = open(&mut h);

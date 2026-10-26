@@ -198,6 +198,8 @@ mod perf_tests;
 #[cfg(test)]
 mod plugin_panel_tests;
 #[cfg(test)]
+mod plugin_save_ui_tests;
+#[cfg(test)]
 mod plugins_browse_tests;
 #[cfg(test)]
 mod popup_width_tests;
@@ -209,6 +211,8 @@ mod present_tab_tests;
 mod present_tests;
 #[cfg(test)]
 mod present_view_tests;
+#[cfg(test)]
+mod property_menu_tests;
 #[cfg(test)]
 mod proto_editor_tests;
 #[cfg(test)]
@@ -239,6 +243,8 @@ mod variables_export_ui_tests;
 mod variables_rename_tests;
 #[cfg(test)]
 mod variants_discovery_tests;
+#[cfg(test)]
+mod vector_keys_tests;
 #[cfg(test)]
 mod vector_panel_tests;
 #[cfg(test)]
@@ -293,6 +299,8 @@ pub trait Services {
         Box::pin(std::future::ready(None))
     }
     fn clipboard_set_text(&mut self, _s: &str) {}
+    /// Give native services access to the window context for platform clipboard output.
+    fn set_egui_context(&mut self, _ctx: &egui::Context) {}
     fn clipboard_get_text(&mut self) -> Option<String> {
         None
     }
@@ -311,6 +319,11 @@ pub trait Services {
     /// The system asks for reduced motion (its accessibility setting).
     fn reduce_motion(&self) -> bool {
         false
+    }
+    /// The system asks for the dark interface (the freedesktop colour scheme): for platforms whose
+    /// windowing stack doesn't report a theme (winit gives none on Linux and the BSDs).
+    fn system_dark(&self) -> Option<bool> {
+        None
     }
     /// After a panic in a frame: keep recovery copies of unsaved files.
     fn emergency_save(&mut self, _session: &Session) {}
@@ -408,9 +421,8 @@ impl Wake for RepaintWaker {
 pub struct NoServices;
 impl Services for NoServices {}
 
-/// Put `text` on the system clipboard through egui's output, which the browser shell writes while
-/// it handles the copy event (the only time a page may write it). For shells without a clipboard
-/// of their own.
+/// Put `text` on the system clipboard through egui's platform output. Native integrations handle
+/// it directly; the browser shell writes it while handling the copy event.
 pub fn egui_copy_text(ctx: &egui::Context, text: &str) {
     ctx.copy_text(text.to_string());
 }
@@ -521,6 +533,34 @@ impl FrameClock {
 pub const LEFT_PANEL: std::ops::RangeInclusive<f32> = 200.0..=480.0;
 pub const RIGHT_PANEL: std::ops::RangeInclusive<f32> = 240.0..=480.0;
 pub const PANEL_DEFAULT: f32 = 240.0;
+/// Windows narrower than this (logical points: phones, portrait tablets) show one side panel at a
+/// time over the canvas, opened from two buttons, instead of both beside it.
+pub const NARROW_WIDTH: f32 = 760.0;
+/// What an open side panel leaves of a narrow window: the column of panel buttons.
+const MOBILE_STRIP: f32 = 48.0;
+
+/// The side panel a narrow window shows.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MobilePanel {
+    Left,
+    Right,
+}
+
+impl UiState {
+    /// Opens the left panel; a narrow window shows it in place of the right one.
+    pub fn open_left_panel(&mut self) {
+        self.left_collapsed = false;
+        self.mobile_panel = Some(MobilePanel::Left);
+    }
+
+    /// Closes the left panel.
+    pub fn close_left_panel(&mut self) {
+        self.left_collapsed = true;
+        if self.mobile_panel == Some(MobilePanel::Left) {
+            self.mobile_panel = None;
+        }
+    }
+}
 pub const CANVAS_MIN: f32 = 160.0;
 
 /// The widths the side panels are drawn at in `avail` points (the window less the icon rail), from
@@ -675,6 +715,10 @@ pub struct UiState {
     /// The Rename layers dialog (several layers), while open.
     pub batch_rename: Option<dialogs::BatchRenameUi>,
     pub left_collapsed: bool,
+    /// The side panel open in a narrow window (a phone), where only one shows at a time.
+    pub mobile_panel: Option<MobilePanel>,
+    /// The window was narrow (one side panel at a time) at the last frame.
+    pub narrow: bool,
     pub comments: comments::CommentUi,
     pub versions: versions::VersionUi,
     /// The branch review dialog, while open.
@@ -822,6 +866,8 @@ impl Default for UiState {
             find: None,
             batch_rename: None,
             left_collapsed: false,
+            mobile_panel: None,
+            narrow: false,
             comments: comments::CommentUi::default(),
             versions: versions::VersionUi::default(),
             branch_review: None,
@@ -1259,7 +1305,14 @@ impl FigApp {
                 "panel.devMode" => {
                     self.ui.right_tab = if self.ui.right_tab == RightTab::Inspect { RightTab::Design } else { RightTab::Inspect };
                 }
-                "panel.leftSidebar" => self.ui.left_collapsed = !self.ui.left_collapsed,
+                "panel.leftSidebar" => {
+                    let shown = if self.ui.narrow { self.ui.mobile_panel == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+                    if shown {
+                        self.ui.close_left_panel();
+                    } else {
+                        self.ui.open_left_panel();
+                    }
+                }
                 "panel.widths" => {
                     let width = |k: &str| r.data.get(k).and_then(Value::as_f64).map(|w| w as f32);
                     let (left, right) = (width("left"), width("right"));
@@ -1274,7 +1327,7 @@ impl FigApp {
                 "panel.layers" => self.ui.left_tab = LeftTab::File,
                 "panel.assets" => {
                     self.ui.left_tab = LeftTab::Assets;
-                    self.ui.left_collapsed = false;
+                    self.ui.open_left_panel();
                     self.ui.versions = Default::default();
                 }
                 "panel.versionHistory" => versions::open(self),
@@ -1283,7 +1336,7 @@ impl FigApp {
                 }
                 "panel.libraries" => {
                     self.ui.left_tab = LeftTab::Assets;
-                    self.ui.left_collapsed = false;
+                    self.ui.open_left_panel();
                     self.ui.libraries = true;
                 }
                 "home" => self.ui.home = true,
@@ -1359,6 +1412,7 @@ impl FigApp {
                 }
                 "dialog.unsaved" => self.toast(i18n::tr("This file has unsaved changes")),
                 "dialog.plugins" => self.ui.plugins_window = true,
+                "dialog.pluginSave" => plugins_ui::save_file(self, &r.data),
                 "dialog.cursorChat" => live::open_chat(self),
                 "window.new" | "window.focus" | "window.fullscreen" => self.window_requests.push(r),
                 _ => {}
@@ -1478,7 +1532,7 @@ impl FigApp {
         let exts: &[&str] = if place {
             &["png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"]
         } else {
-            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig"]
+            &["svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff", "figcraft", "fig", "sketch"]
         };
         let title = if place { i18n::tr("Place image") } else { i18n::tr("Import") };
         self.pick_file(title, exts, true, |app, file| {
@@ -1611,7 +1665,7 @@ impl FigApp {
         self.session.prefs.reduce_motion || self.services.reduce_motion()
     }
 
-    /// The CJK and Bengali scripts the UI shows: the language's, the language picker's (Preferences open),
+    /// The CJK, Bengali and Thai scripts the UI shows: the language's, the language picker's (Preferences open),
     /// typed text's, and those in the open file's names and comments (read when it changes, not
     /// mid-drag). Nothing is checked once every script has a face.
     fn cjk_needed(&mut self, ctx: &egui::Context, installed: u8) -> u8 {
@@ -1696,6 +1750,9 @@ impl FigApp {
             // Cmd/Ctrl+= / - / 0 zoom the canvas (view.zoomIn, view.zoomOut, view.zoom100): egui's
             // own keyboard zoom would scale the whole interface on the same keys.
             ctx.options_mut(|o| o.zoom_with_keyboard = false);
+            // A double-click's window is the platform's (0.5 s, Windows' default), not egui's
+            // stricter 0.3 s: a double-click the OS takes must enter a shape's points too.
+            ctx.memory_mut(|m| m.options.input_options.max_double_click_delay = 0.5);
             theme::install_fonts(ctx, false, 0);
             self.fonts_installed = true;
             // Installed fonts apply from the next frame; a child window draws on here, so ask for
@@ -1728,9 +1785,10 @@ impl FigApp {
         }
         let dark = match self.session.prefs.theme.as_str() {
             "dark" => true,
-            // The active visuals were set by us last frame (possibly for a manual theme).
-            // Read the integration's OS theme instead; without one, keep the light fallback.
-            "system" => ctx.system_theme() == Some(egui::Theme::Dark),
+            // The active visuals were set by us last frame (possibly for a manual theme). Read the
+            // integration's OS theme; winit reports none on Linux and the BSDs, where the platform
+            // services' colour scheme answers instead. Without either, keep the light fallback.
+            "system" => ctx.system_theme().map(|t| t == egui::Theme::Dark).or_else(|| self.services.system_dark()).unwrap_or(false),
             _ => false,
         };
         self.ui.dark = dark;
@@ -1771,7 +1829,11 @@ impl FigApp {
         let on = !cfg!(target_arch = "wasm32") && self.session.prefs.auto_save;
         let saving = &self.ui.auto_saving;
         let due = |d: &&figcraft_engine::DocState| {
-            d.path.is_some() && d.branch_of.is_none() && d.preview.is_none() && d.is_dirty() && !saving.iter().any(|(uid, _)| *uid == d.uid)
+            d.path.as_deref().is_some_and(|p| d.images_lost_saving_to(p).is_none())
+                && d.branch_of.is_none()
+                && d.preview.is_none()
+                && d.is_dirty()
+                && !saving.iter().any(|(uid, _)| *uid == d.uid)
         };
         let changes = if on { self.session.docs.iter().filter(due).map(|d| d.revision).reduce(u64::wrapping_add) } else { None };
         match changes {
@@ -1903,6 +1965,32 @@ impl FigApp {
         !hidden && (!board || self.ui.board_panel)
     }
 
+    /// A narrow window's two buttons for the side panels (touch-sized); the open one closes again.
+    fn mobile_buttons(&mut self, ctx: &egui::Context, at: egui::Pos2) {
+        use a11y::Tip as _;
+        let t = theme::Tokens::get(ctx);
+        egui::Area::new(egui::Id::unique("mobile_panel_buttons")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+            for (side, icon, name) in
+                [(MobilePanel::Left, icons::Icon::Layers, i18n::tr("Layers")), (MobilePanel::Right, icons::Icon::Panels, i18n::tr("Design"))]
+            {
+                let open = self.ui.mobile_panel == Some(side);
+                let (r, resp) = ui.allocate_exact_size(egui::vec2(40.0, 40.0), egui::Sense::click());
+                let resp = resp.tip(name);
+                let fill = if open { t.accent } else { t.panel };
+                ui.painter().rect(r, 8.0, fill, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+                icons::paint(ui.painter(), r.shrink(10.0), icon, if open { t.accent_on } else { t.icon });
+                if resp.clicked() {
+                    if side == MobilePanel::Left && !open {
+                        self.ui.open_left_panel();
+                    } else {
+                        self.ui.mobile_panel = if open { None } else { Some(side) };
+                    }
+                }
+                ui.add_space(4.0);
+            }
+        });
+    }
+
     /// One frame of the window drawing now.
     pub(crate) fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
@@ -1972,8 +2060,12 @@ impl FigApp {
             return;
         }
         let hidden = self.session.ds().map(|d| d.view.ui_hidden).unwrap_or(false);
-        let right_open = self.right_panel_shown(hidden);
-        if !hidden {
+        let narrow = !hidden && ui.available_width() < NARROW_WIDTH;
+        let mobile = self.ui.mobile_panel.filter(|_| narrow);
+        self.ui.narrow = narrow;
+        // A narrow window shows the right panel when its button asks for it, a board's too.
+        let right_open = (self.right_panel_shown(hidden) && !narrow) || mobile == Some(MobilePanel::Right);
+        if !hidden && (!narrow || mobile == Some(MobilePanel::Left)) {
             egui::Panel::left("left_rail")
                 .exact_size(56.0)
                 .resizable(false)
@@ -1984,12 +2076,19 @@ impl FigApp {
                 });
         }
         // The panels are as wide as asked, less in a window too small for them and the canvas.
-        let left_open = !hidden && !self.ui.left_collapsed;
-        let (left_w, right_w) = fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(self.ui.right_width));
+        let left_open = !hidden && if narrow { mobile == Some(MobilePanel::Left) } else { !self.ui.left_collapsed };
+        let (left_w, right_w) = if narrow {
+            let w = (ui.available_width() - MOBILE_STRIP).max(0.0);
+            (if left_open { w } else { 0.0 }, w)
+        } else {
+            fit_panels(ui.available_width(), left_open.then_some(self.ui.left_width), right_open.then_some(self.ui.right_width))
+        };
         let rows = ui.available_rect_before_wrap().y_range();
         let mut edges: Vec<(&str, f32, f32, f32)> = Vec::new();
         if left_open {
-            edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+            if !narrow {
+                edges.push(("left", ui.available_rect_before_wrap().min.x + left_w, left_w, 1.0));
+            }
             egui::Panel::left("left_panel")
                 .resizable(false)
                 .exact_size(left_w)
@@ -2005,7 +2104,9 @@ impl FigApp {
                 });
         }
         if right_open {
-            edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+            if !narrow {
+                edges.push(("right", ui.available_rect_before_wrap().max.x - right_w, right_w, -1.0));
+            }
             egui::Panel::right("right_panel")
                 .resizable(false)
                 .exact_size(right_w)
@@ -2025,13 +2126,17 @@ impl FigApp {
             let mut worker = worker.unwrap_or_else(|| render_worker::Worker::new(ctx.clone()));
             canvas::show(self, ui, &mut worker);
             self.worker = Some(worker);
-            if !hidden {
+            if !hidden && mobile.is_none() {
                 ui.scope_builder(egui::UiBuilder::new().id_salt("toolbar"), |ui| {
                     a11y::container(ui, egui::accesskit::Role::Toolbar, i18n::tr("Tools"));
                     toolbar::show(self, ui);
                 });
             }
         });
+        if narrow {
+            let x = if mobile == Some(MobilePanel::Left) { ctx.content_rect().max.x - MOBILE_STRIP + 4.0 } else { ctx.content_rect().min.x + 4.0 };
+            self.mobile_buttons(&ctx, egui::pos2(x, rows.min + 8.0));
+        }
         // The panels' edges, over the canvas and the panels (drawn after them: they take the press).
         for (name, x, shown, grows) in edges {
             if let Some(w) = Self::panel_edge(ui, name, x, rows, shown, grows) {
@@ -2223,17 +2328,17 @@ impl FigApp {
 }
 
 /// The file types File ▸ Open and a drop on the home screen open.
-pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
+pub(crate) const OPEN_EXTENSIONS: &[&str] = &["figcraft", "fig", "sketch", "json", "svg", "png", "jpg", "jpeg", "webp", "gif", "tif", "tiff"];
 
 /// Whether `path` names a file type that opens as a document (the extension, in any case).
 pub(crate) fn opens(path: &Path) -> bool {
     path.extension().and_then(OsStr::to_str).is_some_and(|e| OPEN_EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-/// Whether `path` is a whole document (`.figcraft`, `.fig`, file JSON) rather than an image or SVG:
+/// Whether `path` is a whole document (`.figcraft`, `.fig`, `.sketch`, file JSON) rather than an image or SVG:
 /// dropped on the canvas it opens as a file of its own instead of adding its pages to the open one.
 pub(crate) fn is_document(path: &Path) -> bool {
-    path.extension().and_then(OsStr::to_str).is_some_and(|e| ["figcraft", "fig", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
+    path.extension().and_then(OsStr::to_str).is_some_and(|e| ["figcraft", "fig", "sketch", "json"].iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// Reads the contents of dropped file `name` that has no file on disk to read by path.

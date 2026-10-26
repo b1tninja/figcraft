@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.open",
             "Open",
-            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .svg, .png, .jpg …); REST and .fig imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open just returns its `index`)",
+            "{path | data (base64) + name (tells the format; opens as a new unsaved document), variables? (REST: the local variables JSON as an object, JSON text or a path; default `<name>.variables.json` or `variables.json` next to the file)} (.figcraft, .json: FigCraft or REST API file JSON, .fig (best effort), .sketch (Sketch 48 or newer, best effort), .svg, .png, .jpg …); REST, .fig and .sketch imports return `warnings`; a file opened anew returns `summary` {name, pages, layers, images} (one that was already open just returns its `index`)",
             false,
             open
         ),
@@ -105,7 +105,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "file.import",
             "Import",
-            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON and .fig pages are appended with their variables and flows (REST and .fig: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
+            "{path | data (base64) + name, x?, y?, center? (SVG: centre it on x, y), variables? (REST: the local variables JSON as an object, JSON text or a path)}  SVG becomes an editable frame (shapes, text, gradients, masks, effects; with `warnings` for what it left out), images become image layers, .figcraft, REST API file JSON, .fig and .sketch pages are appended with their variables and flows (REST, .fig and .sketch: with `warnings`; those return `summary` {name, pages, layers, images} of the file read)",
             true,
             import
         ),
@@ -170,7 +170,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let i = s.active;
             let uid = s.ds()?.uid;
             if let Some(slot) = s.docs.get_mut(i) {
-                *slot = DocState::new(loaded.doc, Some(path)).with_versions(loaded.versions).with_branches(loaded.branches);
+                *slot = DocState::new(loaded.doc, Some(path.clone()))
+                    .with_versions(loaded.versions)
+                    .with_branches(loaded.branches)
+                    .with_images_left_in_file(&path, loaded.images_past_budget);
             }
             // Edits on its branch tabs are reverted too.
             crate::branches::close_tabs(s, uid, None);
@@ -562,6 +565,9 @@ fn load_with(
             if let Some(r) = load_fig(bytes, &file_stem(name_hint)) {
                 return Ok((r?, true));
             }
+            if let Some(r) = load_sketch(bytes, &file_stem(name_hint)) {
+                return Ok((r?, true));
+            }
             if let Some(r) = figcraft_format::rest::try_import_with(bytes, variables, images) {
                 let (mut doc, warnings) = r.map_err(|e| EngineError::Other(e.to_string()))?;
                 link_instances(&mut doc);
@@ -575,6 +581,219 @@ fn load_with(
             Ok((loaded, false))
         }
     }
+}
+
+/// Gives `None` when `bytes` are not a `.sketch` file. Then other readers can try.
+fn load_sketch(bytes: &[u8], name: &str) -> Option<Result<figcraft_format::Loaded>> {
+    if !figcraft_format::sketch::is_sketch(bytes) {
+        return None;
+    }
+    // The import and what follows read the installed fonts: the system's must be known first (the
+    // desktop app scans them in the background; this waits for that scan).
+    figcraft_text::fontdb::scan_system_fonts();
+    let fonts: figcraft_format::sketch::FontLookup = Box::new(figcraft_text::fontdb::postscript_face);
+    let r = figcraft_format::sketch::try_import_with_fonts(bytes, name, Some(fonts))?;
+    Some(r.map_err(|e| EngineError::Other(e.to_string())).map(|(mut doc, warnings)| {
+        match_font_families(&mut doc);
+        platform_tracking(&mut doc);
+        sketch_line_heights(&mut doc);
+        link_instances(&mut doc);
+        reflow_overridden_text(&mut doc);
+        figcraft_format::Loaded { issues: warnings, ..doc.into() }
+    }))
+}
+
+/// Instances of a stack sized apart from their main are laid out at their size, and texts in
+/// instances whose string an override changed are measured again with the auto layout around them
+/// re-flowing (Sketch saves layouts measured with the master's string). The rest keeps the layout
+/// Sketch saved.
+fn reflow_overridden_text(doc: &mut Document) {
+    let changed: Vec<NodeId> = doc
+        .nodes()
+        .filter(|n| match (&n.kind, n.source.and_then(|s| doc.node(s)).map(|s| &s.kind)) {
+            (NodeKind::Text(t), Some(NodeKind::Text(main))) => t.characters != main.characters,
+            _ => false,
+        })
+        .map(|n| n.id)
+        .collect();
+    let m = crate::measure::TextMeasure;
+    // Instances of a stack at another size than their main: the stack at their size, innermost first.
+    let mut resized: Vec<(usize, NodeId)> = doc
+        .nodes()
+        .filter(|n| n.layout.is_some())
+        .filter(|n| match &n.kind {
+            NodeKind::Instance { component, .. } => {
+                doc.node(*component).is_some_and(|c| (c.width - n.width).abs() > 1e-6 || (c.height - n.height).abs() > 1e-6)
+            }
+            _ => false,
+        })
+        .map(|n| (doc.ancestors(n.id).len(), n.id))
+        .collect();
+    resized.sort_by_key(|r| std::cmp::Reverse(r.0));
+    for (_, id) in resized {
+        figcraft_layout::layout_frame(doc, id, &m);
+    }
+    for id in changed {
+        if let Some((w, h)) = doc.node(id).and_then(figcraft_text::auto_size) {
+            figcraft_layout::set_size(doc, id, w, h);
+        }
+        figcraft_layout::layout_up(doc, id, &m);
+    }
+}
+
+/// Font families a `.sketch` import guessed from PostScript names ("Ping Fang SC" from
+/// "PingFangSC-Semibold") take the installed family's name when they differ only in spaces and
+/// case.
+fn match_font_families(doc: &mut Document) {
+    let installed = figcraft_text::fontdb::family_names();
+    let mut cache: std::collections::BTreeMap<String, Option<String>> = std::collections::BTreeMap::new();
+    let mut fix = |style: &mut figcraft_doc::TextStyle| {
+        let found = cache.entry(style.font_family.clone()).or_insert_with(|| installed_family(&style.font_family, &installed));
+        if let Some(f) = found {
+            style.font_family = f.clone();
+        }
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        if let Some(NodeKind::Text(td)) = doc.node_mut(id).map(|n| &mut n.kind) {
+            fix(&mut td.style);
+            for r in &mut td.runs {
+                fix(&mut r.style);
+            }
+        }
+    }
+    // Shared text styles too, so they stay like the layers linked to them.
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            fix(style);
+        }
+    }
+}
+
+/// Sketch draws text with the tracking a font's `trak` table gives at its size (Apple's text engine
+/// adds it; FigCraft's, like Figma's, doesn't): the imported text keeps it as letter spacing, so
+/// lines measure and break as they did there. A named style's optical size follows the text size
+/// there too (FigCraft keeps the instance's), so the imported text carries it as an `opsz` value.
+fn platform_tracking(doc: &mut Document) {
+    let mut cache: std::collections::BTreeMap<(String, String), Option<std::sync::Arc<figcraft_text::fontdb::Face>>> =
+        std::collections::BTreeMap::new();
+    let mut face = |style: &figcraft_doc::TextStyle| {
+        cache
+            .entry((style.font_family.clone(), style.font_style.clone()))
+            .or_insert_with(|| {
+                figcraft_text::fontdb::has_family(&style.font_family)
+                    .then(|| figcraft_text::fontdb::find_face(&style.font_family, &style.font_style))
+                    .flatten()
+            })
+            .clone()
+    };
+    let mut track = |style: &mut figcraft_doc::TextStyle| {
+        let Some(f) = face(style) else { return };
+        let t = f.tracking(style.font_size);
+        if t != 0.0 && t.is_finite() {
+            let px = style.letter_spacing.resolve(style.font_size);
+            style.letter_spacing = figcraft_doc::LetterSpacing::Pixels(px + t);
+        }
+        if f.axis("opsz").is_some() && f.instance(&style.font_style).is_some() && style.font_size.is_finite() {
+            style.variations.entry("opsz".into()).or_insert(style.font_size);
+        }
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        if let Some(NodeKind::Text(td)) = doc.node_mut(id).map(|n| &mut n.kind) {
+            track(&mut td.style);
+            for r in &mut td.runs {
+                track(&mut r.style);
+            }
+        }
+    }
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            track(style);
+        }
+    }
+}
+
+/// Families Sketch (Apple's text system) gives a fifth more than their ascent and descent as their
+/// natural line: classic Mac fonts, found on `sketchtool` renders. Other fonts show none of this.
+const TALL_LINE_FAMILIES: [&str; 11] =
+    ["Academy Engraved LET", "Courier", "Helvetica", "Hoefler Text", "Palatino", "Sathu", "Silom", "Skia", "Times", "Webdings", "Zapf Dingbats"];
+
+/// Sketch's natural line for a font of `ascent` and `descent` in `upem` units at `size` px: its
+/// height in px and how far down the text moves so its baseline sits where Sketch puts it. Sketch
+/// rounds the ascent and descent to whole pixels each and leaves the font's line gap out (a fifth
+/// more for [`TALL_LINE_FAMILIES`]), with the baseline above the rounded descent; FigCraft centres
+/// the font's own ascent and descent in the line. `(0, 0)` without metrics.
+pub(crate) fn sketch_line(ascent: f64, descent: f64, upem: f64, family: &str, size: f64) -> (f64, f64) {
+    let k = size / upem;
+    let (a, d) = (ascent * k, descent * k);
+    if !(a.is_finite() && d.is_finite()) || a + d <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let natural = a.round() + d.round();
+    let line = if TALL_LINE_FAMILIES.iter().any(|f| f.eq_ignore_ascii_case(family)) { (natural * 1.2).round() } else { natural };
+    let sketch_baseline = line - d.round();
+    let figcraft_baseline = (line - (a + d)) / 2.0 + a;
+    (line, sketch_baseline - figcraft_baseline)
+}
+
+/// Text without a fixed line height takes the line Sketch drew it with (FigCraft's natural line,
+/// like Figma's, counts the font's line gap and centres the font in it; Sketch's doesn't), as a
+/// share of its size so it still follows the size, and moves to Sketch's baseline. Shared text
+/// styles take the line too.
+fn sketch_line_heights(doc: &mut Document) {
+    // Per family and style: the face's ascent, descent and units per em.
+    type Metrics = Option<(f64, f64, f64)>;
+    let mut cache: std::collections::BTreeMap<(String, String), Metrics> = std::collections::BTreeMap::new();
+    let mut set = |style: &mut TextStyle| -> f64 {
+        if style.line_height != LineHeight::Auto || !style.font_size.is_finite() || style.font_size <= 0.0 {
+            return 0.0;
+        }
+        let m = *cache.entry((style.font_family.clone(), style.font_style.clone())).or_insert_with(|| {
+            figcraft_text::fontdb::has_family(&style.font_family)
+                .then(|| figcraft_text::fontdb::find_face(&style.font_family, &style.font_style))
+                .flatten()
+                .map(|f| (f.ascent, f.descent, f.upem))
+        });
+        let Some((a, d, upem)) = m else { return 0.0 };
+        let (line, down) = sketch_line(a, d, upem, &style.font_family, style.font_size);
+        if line > 0.0 {
+            style.line_height = LineHeight::Percent(line / style.font_size * 100.0);
+        }
+        down
+    };
+    let ids: Vec<NodeId> = doc.nodes().filter(|n| matches!(n.kind, NodeKind::Text(_))).map(|n| n.id).collect();
+    for id in ids {
+        // An auto layout places its texts itself (its next pass would take a move back).
+        let laid_out =
+            doc.node(id).is_some_and(|n| !n.child_layout.absolute && n.parent.and_then(|p| doc.node(p)).is_some_and(|p| p.layout.is_some()));
+        let Some(n) = doc.node_mut(id) else { continue };
+        let NodeKind::Text(td) = &mut n.kind else { continue };
+        let down = set(&mut td.style);
+        for r in &mut td.runs {
+            set(&mut r.style);
+        }
+        // Down in the layer's own frame (a rotated text moves along its own axis).
+        if !laid_out && down.is_finite() && down != 0.0 {
+            n.transform *= figcraft_doc::geom::Affine::translate((0.0, down));
+        }
+    }
+    for st in &mut doc.styles {
+        if let StyleKind::Text { style } = &mut st.kind {
+            set(style);
+        }
+    }
+}
+
+/// The installed family `family` means when it isn't installed under that exact name: the one
+/// whose name is the same without spaces, ignoring case.
+pub(crate) fn installed_family(family: &str, installed: &[String]) -> Option<String> {
+    let key = |s: &str| s.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect::<String>();
+    if installed.iter().any(|f| f.eq_ignore_ascii_case(family)) {
+        return None;
+    }
+    let want = key(family);
+    installed.iter().find(|f| key(f) == want).cloned()
 }
 
 /// Gives `None` when `bytes` are not a `.fig` file. Then other readers can try.
@@ -745,7 +964,13 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
         });
     }
     let summary = import_summary(&loaded.doc);
-    s.docs.push(DocState::new(loaded.doc, native.then_some(path)).with_versions(loaded.versions).with_branches(loaded.branches));
+    let images_left_out = if native { loaded.images_past_budget } else { 0 };
+    s.docs.push(
+        DocState::new(loaded.doc, native.then(|| path.clone()))
+            .with_versions(loaded.versions)
+            .with_branches(loaded.branches)
+            .with_images_left_in_file(&path, images_left_out),
+    );
     s.active = s.docs.len() - 1;
     let mut out = json!({"index": s.active, "summary": summary});
     out[if warnings { "warnings" } else { "repairs" }] = json!(loaded.issues);
@@ -833,7 +1058,9 @@ impl FileSnapshot {
         let Some(ds) = s.docs.iter_mut().find(|d| d.uid == self.uid && d.path == self.path && Arc::ptr_eq(&d.saved_doc, &self.saved)) else {
             return Ok(false);
         };
-        write(self.path.as_deref().ok_or(EngineError::NoDocument)?, bytes)?;
+        let path = self.path.as_deref().ok_or(EngineError::NoDocument)?;
+        refuse_dropping_images(ds, path)?;
+        write(path, bytes)?;
         // The history or branches may have changed since: then they still count as unsaved.
         if ds.revision == self.revision {
             ds.versions_changed = false;
@@ -842,6 +1069,16 @@ impl FileSnapshot {
         ds.revision += 1;
         branch_tabs_saved(s, self.uid);
         Ok(true)
+    }
+}
+
+fn refuse_dropping_images(ds: &DocState, path: &str) -> Result<()> {
+    match ds.images_lost_saving_to(path) {
+        Some(count) => Err(EngineError::Other(format!(
+            "{} wasn't saved: {count} of its images weren't loaded (together they pass what FigCraft reads from one file), and saving over it would delete them. Save it under another name; this file keeps them.",
+            file_stem(path)
+        ))),
+        None => Ok(()),
     }
 }
 
@@ -896,6 +1133,10 @@ fn save_to(s: &mut Session, path: Option<String>) -> Result<Value> {
     }
     let i = crate::branches::file_tab(s);
     let ds = s.docs.get_mut(i).ok_or(EngineError::NoDocument)?;
+    // A download (no path) writes over no file.
+    if let Some(path) = path.as_deref() {
+        refuse_dropping_images(ds, path)?;
+    }
     let mut snapshot = FileSnapshot::of(ds);
     let follows_path = ds.path.as_deref().map_or(ds.doc.name == "Untitled", |old| ds.doc.name == file_stem(old));
     if let Some(path) = path.as_deref()
@@ -1265,12 +1506,15 @@ fn export_path(name: &str) -> String {
     if parts.is_empty() { "Untitled".into() } else { parts.join("/") }
 }
 
+/// Characters no file name may contain (path separators and ones file systems reject).
+pub(crate) const FORBIDDEN_FILE_NAME_CHARS: &str = "/\\:*?\"<>|";
+
 /// `name` without path separators and characters file systems reject (`/ \ : * ? " < > |` and
 /// control characters become `_`); everything else is kept, up to the first 200 characters.
 /// `figcraft-cli export` names its files by this rule too (and keeps at most 100 characters before
 /// the number and extension it adds).
 pub fn safe_file_name(name: &str) -> String {
-    name.chars().take(200).map(|c| if c.is_control() || "/\\:*?\"<>|".contains(c) { '_' } else { c }).collect()
+    name.chars().take(200).map(|c| if c.is_control() || FORBIDDEN_FILE_NAME_CHARS.contains(c) { '_' } else { c }).collect()
 }
 
 /// Layers on `page` that have export settings (document order).
@@ -1459,7 +1703,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
             }
             Ok(out)
         }
-        "figcraft" | "json" | "fig" => {
+        "figcraft" | "json" | "fig" | "sketch" => {
             let resolver = path.as_deref().map(rest_images);
             let images: figcraft_format::rest::ImageResolver = match &resolver {
                 Some(r) => r,

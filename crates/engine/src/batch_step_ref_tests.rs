@@ -258,3 +258,25 @@ fn a_nested_batch_has_its_own_names() {
     );
     assert!(msg.contains("`$ref` \"frame\" names no step"), "the outer names aren't visible inside: {msg}");
 }
+
+#[test]
+fn a_failing_command_names_its_step_and_rolls_back() {
+    let mut s = Session::new();
+    let frame = id(&s.execute("node.create", &json!({"type": "frame", "width": 50, "height": 50})).unwrap());
+    let text = id(&s.execute("node.create", &json!({"type": "text", "text": "orig"})).unwrap());
+    let undo = s.ds().unwrap().history.undo.len();
+    let name = s.doc().unwrap().node(s.page().unwrap()).unwrap().name.clone();
+    let msg = batch_error(
+        &mut s,
+        json!([
+            {"command": "text.set", "params": {"ids": [text.0], "text": "novo"}},
+            {"command": "text.set", "params": {"ids": [frame.0], "text": "erro"}},
+            {"command": "page.rename", "params": {"name": "Depois do erro"}}
+        ]),
+    );
+    // Still the command's own kind of error, its message saying which step.
+    assert!(msg.starts_with("step 1: ") && msg.contains("is not text"), "{msg}");
+    assert!(matches!(&s.doc().unwrap().node(text).unwrap().kind, figcraft_doc::NodeKind::Text(t) if t.characters == "orig"));
+    assert_eq!(s.doc().unwrap().node(s.page().unwrap()).unwrap().name, name);
+    assert_eq!(s.ds().unwrap().history.undo.len(), undo);
+}

@@ -292,8 +292,29 @@ pub fn export(file: &str, out: &str, t: &Target) -> CliResult<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+fn refuse_dropping_images(input: &str, out: &str, images_left_out: usize) -> CliResult<()> {
+    if images_left_out > 0 && figcraft_engine::file_access::same_file(input, out) {
+        return Err(CliError::Failed(format!(
+            "{out} wasn't written: {images_left_out} of its images weren't loaded (together they pass what FigCraft reads from one file), and writing over it would delete them. Write to another path; {input} keeps them."
+        )));
+    }
+    Ok(())
+}
+
+fn refuse_dropping_images_from_script(input: Option<(&str, usize)>, active: &figcraft_engine::DocState, out: &str) -> CliResult<()> {
+    if let Some((input, images_left_out)) = input {
+        refuse_dropping_images(input, out, images_left_out)?;
+    }
+    if let Some(images_left_out) = active.images_lost_saving_to(out) {
+        refuse_dropping_images(out, out, images_left_out)?;
+    }
+    Ok(())
+}
+
 pub fn convert(input: &str, out: &str) -> CliResult<ExitCode> {
-    let doc = load(input)?;
+    let (loaded, _) = figcraft_engine::cmd::file::load_path(input, None).map_err(|e| CliError::Failed(format!("can't open {input}: {e}")))?;
+    refuse_dropping_images(input, out, loaded.images_past_budget)?;
+    let doc = loaded.doc;
     let page = doc
         .current_page
         .filter(|p| doc.pages.contains(p))
@@ -353,13 +374,14 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
     let bytes = figcraft_engine::file_access::read(script).map_err(|e| CliError::Failed(e.to_string()))?;
     let text = String::from_utf8(bytes).map_err(|_| CliError::Failed(format!("{script}: not UTF-8")))?;
     let steps = parse_script(&text).map_err(|e| CliError::Failed(format!("{script}: {e}")))?;
-    let mut s = match input {
+    let (mut s, input_images_left_out) = match input {
         Some(path) => {
             let mut s = Session::empty();
             s.execute("file.open", &json!({"path": path})).map_err(|e| CliError::Failed(format!("can't open {path}: {e}")))?;
-            s
+            let left_out = s.ds().map_err(|e| CliError::Failed(e.to_string()))?.images_lost_saving_to(path).unwrap_or(0);
+            (s, left_out)
         }
-        None => Session::new(),
+        None => (Session::new(), 0),
     };
     // One undo step and all-or-nothing, the way the same commands behave through `command.batch`
     // (MCP, the control channel, plugins): `{"$step": n}` and `{"$ref": "name"}` resolve against the
@@ -389,6 +411,7 @@ pub fn run_script(script: &str, input: Option<&str>, out: Option<&str>) -> CliRe
     }
     if let Some(out) = out {
         let ds = s.ds().map_err(|e| CliError::Failed(e.to_string()))?;
+        refuse_dropping_images_from_script(input.map(|input| (input, input_images_left_out)), ds, out)?;
         if ext(out) == "figcraft" {
             // Through the engine, so the version history is kept.
             write(out, &figcraft_engine::cmd::file::file_bytes(ds).map_err(|e| CliError::Failed(e.to_string()))?)?;
@@ -565,6 +588,26 @@ mod tests {
         // The failure is the script's, not the call's: the CLI reports it and exits non-zero.
         run_script(script.to_str().unwrap(), None, Some(out.to_str().unwrap())).unwrap();
         assert!(!out.exists(), "a script that failed writes nothing");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_script_output_over_its_input_is_refused_whichever_tab_the_script_left_active() {
+        let dir = temp_dir("script-images-left-out");
+        let input = dir.join("big.figcraft");
+        std::fs::write(&input, b"kept").unwrap();
+        let link = dir.join("link.figcraft");
+        std::fs::hard_link(&input, &link).unwrap();
+        let (input, link, other) = (input.to_str().unwrap(), link.to_str().unwrap(), dir.join("other.figcraft"));
+        let duplicate = Session::new();
+        let active = duplicate.ds().unwrap();
+
+        for out in [input, link] {
+            let refused = refuse_dropping_images_from_script(Some((input, 3)), active, out);
+            assert!(matches!(&refused, Err(CliError::Failed(m)) if m.contains("3 of its images")), "{out}");
+        }
+        assert!(refuse_dropping_images_from_script(Some((input, 3)), active, other.to_str().unwrap()).is_ok());
+        assert!(refuse_dropping_images_from_script(Some((input, 0)), active, input).is_ok());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

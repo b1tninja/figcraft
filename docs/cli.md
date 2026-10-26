@@ -25,6 +25,10 @@ On Linux and other Unix systems except macOS, user fonts are read from
 `$XDG_DATA_HOME/fonts`, or `$HOME/.local/share/fonts` when `XDG_DATA_HOME` is unset,
 empty or relative. The legacy `$HOME/.fonts` directory is also scanned.
 
+On macOS, fonts activated through Adobe Fonts are read where Creative Cloud keeps them
+(`~/Library/Application Support/Adobe/CoreSync/plugins/livetype`), so they're available while
+they're active there. Files without an extension are read when they start like a font file.
+
 The collaboration server is a binary of its own, `figcraft-server` (`cargo build --release -p
 figcraft-server`): it keeps files with share links and serves their live sessions, and its
 `key`, `files`, `links`, `reports`, `block-ip` and `check` subcommands manage them (a server can
@@ -42,7 +46,8 @@ layers}]` with `--json`); their text renders in a fallback font.
 Every subcommand that reads a file also takes the public REST API file JSON (the response of
 `GET /v1/files/:key` or of its nodes endpoint, written to a `.json` file): it is imported on the fly.
 Image fills come from `images/<imageRef>.png` (or `.jpg`, …) next to the JSON when present, else a
-grey placeholder. `.fig` files are read the same way (best effort, images from the file itself);
+grey placeholder. `.fig` files are read the same way (best effort, images from the file itself), and
+so are `.sketch` files saved by Sketch 48 or newer;
 `info` lists what wasn't imported as `note:` lines.
 
 ```text
@@ -96,7 +101,7 @@ figcraft-cli export app.figcraft -o handoff.fig
 
 ### `convert <in> <out>`
 
-By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.svg` (an editable frame: groups,
+By extension. Inputs: `.figcraft`, `.json` (FigCraft or REST API file JSON), `.fig` (best effort), `.sketch` (Sketch 48 or newer, best effort), `.svg` (an editable frame: groups,
 shapes, text, gradients, masks and effects; `info` lists what it left out as `note:` lines), `.png/.jpg/.webp/.gif/.tif/.bmp`
 (an image layer). Outputs: `.figcraft`, `.json` (FigCraft JSON, pretty-printed), `.svg`,
 `.png/.jpg/.webp` (the current page rendered at 1x with its background), `.pdf` (the current page's

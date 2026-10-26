@@ -118,10 +118,10 @@ pub fn rail(app: &mut FigApp, ui: &mut Ui) {
                 Some(tb) => {
                     // Leaving the version history shows the tab rather than collapsing it.
                     if active {
-                        app.ui.left_collapsed = true;
+                        app.ui.close_left_panel();
                     } else {
                         app.ui.left_tab = tb;
-                        app.ui.left_collapsed = false;
+                        app.ui.open_left_panel();
                     }
                     app.ui.versions = Default::default();
                 }
@@ -163,7 +163,7 @@ pub fn left_panel(app: &mut FigApp, ui: &mut Ui) {
     }
     icons::paint(ui.painter(), hr.shrink(5.0), Icon::Panels, t.icon);
     if hresp.clicked() {
-        app.ui.left_collapsed = true;
+        app.ui.close_left_panel();
     }
     ui.painter().line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.border));
     match app.ui.left_tab {
@@ -637,7 +637,7 @@ pub(crate) fn start_rename(app: &mut FigApp, ids: &[NodeId]) {
     let rows = listed_rows(&doc, page, &app.ui.expanded, &app.ui.layer_filter.trim().to_lowercase());
     let Some(id) = rows.iter().map(|r| r.id).find(|r| ids.contains(r)) else { return };
     app.ui.left_tab = LeftTab::File;
-    app.ui.left_collapsed = false;
+    app.ui.open_left_panel();
     rename_layer(app, id);
 }
 

@@ -582,6 +582,11 @@ fn the_intensity_label_fits_whole_in_every_language() {
             let label = lang.ui.iter().find(|(k, _)| *k == "Intensity").map_or("Intensity", |(_, t)| match t {
                 Text::Plain(s) | Text::Plural { other: s, .. } => s,
             });
+            // The test's context has only egui's own font: a label it can't draw (Vietnamese
+            // diacritics, CJK) can't be measured here, and the app draws it with a system font.
+            if !ui.ctx().fonts_mut(|f| f.has_glyphs(&crate::theme::regular(11.0), label)) {
+                continue;
+            }
             let lead = crate::widgets::text_lead_width(ui, label, GLASS_FIELD_W);
             assert!(lead >= 12.0 + width(label), "{}: {label:?} would end in \"…\"", lang.code);
         }

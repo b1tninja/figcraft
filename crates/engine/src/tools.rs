@@ -4,6 +4,7 @@
 
 use std::collections::BTreeMap;
 
+use figcraft_color::{ImageScaleMode, PaintKind};
 use figcraft_doc::geometry::select_target;
 use figcraft_doc::*;
 use figcraft_geom::{Affine, Point, Rect, Vec2};
@@ -327,6 +328,9 @@ pub struct Overlay {
     pub vector_hover: Option<crate::vectoredit::VHit>,
     /// The edited layer `vector_hover` is on (several layers can be in edit mode).
     pub vector_hover_on: Option<NodeId>,
+    /// Vector edit mode: the point a press on the outline would add (the pen's ghost anchor where
+    /// it is over a segment, or the midpoint of the segment under the Move tool).
+    pub vector_add: Option<VectorAdd>,
     /// Vector edit mode, Variable width tool: the width point, handle or path under the pointer.
     pub width_hover: Option<crate::vectoredit::WHit>,
     pub lasso: Vec<[f64; 2]>,
@@ -349,6 +353,16 @@ pub struct Overlay {
     /// while one is dragged (see [`crate::shape_handles`]).
     pub shape_hover: Option<ShapeHandle>,
     pub shape: Option<ShapeHint>,
+}
+
+/// A point a press would add to the edited vector's outline: page position, whether it is a
+/// segment's midpoint (the Move tool) rather than the pen's place on its segment, and whether the
+/// pointer is on it (a press adds it; otherwise it just shows where one would go).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct VectorAdd {
+    pub at: [f64; 2],
+    pub midpoint: bool,
+    pub on: bool,
 }
 
 /// The Scale tool's live readout while dragging a handle.
@@ -1726,6 +1740,44 @@ impl Session {
                 if flip_y {
                     t *= Affine::new([1.0, 0.0, 0.0, -1.0, 0.0, nh]);
                 }
+                // Text reflow and auto layout can recompute this box after the preview (a size bound
+                // to a variable lets go of it: the resize is an explicit edit).
+                let n = doc.get(*id)?;
+                let crop_images = ev.cmd
+                    && !matches!(n.kind, NodeKind::Text(_))
+                    && !std::iter::once(*id).chain(doc.ancestors(*id)).any(|a| doc.node(a).is_some_and(|n| n.layout.is_some()));
+                if crop_images {
+                    // Crop the layer's image fills without moving their pixels on the page.
+                    // Work from the interaction snapshot, just like the geometry on every move.
+                    let (w, h) = (n.width.max(1e-6), n.height.max(1e-6));
+                    let to_old =
+                        Affine::scale_non_uniform(1.0 / w, 1.0 / h) * world.inverse() * t * Affine::scale_non_uniform(nw.max(0.01), nh.max(0.01));
+                    let mut fills = n.fills.clone();
+                    for paint in &mut fills {
+                        let PaintKind::Image(img) = &mut paint.kind else { continue };
+                        // A repeating image cannot be represented by a single Crop placement.
+                        if img.scale_mode == ImageScaleMode::Tile {
+                            continue;
+                        }
+                        let Some(data) = doc.images.get(&img.image) else { continue };
+                        let (iw, ih) = (f64::from(data.width), f64::from(data.height));
+                        let crop = if img.scale_mode == ImageScaleMode::Crop {
+                            img.effective_crop(iw, ih, w, h)
+                        } else {
+                            let (rw, rh) = img.rotated_size(iw.max(1.0), ih.max(1.0));
+                            let s = if img.scale_mode == ImageScaleMode::Fit { (w / rw).min(h / rh) } else { (w / rw).max(h / rh) };
+                            [w / (rw * s), 0.0, 0.0, h / (rh * s), (rw * s - w) / (2.0 * rw * s), (rh * s - h) / (2.0 * rh * s)]
+                        };
+                        // A degenerate (zero-scale) layer has no inverse: its image keeps its placement.
+                        let crop = (Affine::new(crop) * to_old).as_coeffs();
+                        if !crop.iter().all(|c| c.is_finite()) {
+                            continue;
+                        }
+                        img.crop = Some(crop);
+                        img.scale_mode = ImageScaleMode::Crop;
+                    }
+                    doc.get_mut(*id)?.fills = fills;
+                }
                 doc.set_world_transform(*id, t)?;
                 if kept.is_empty() {
                     crate::cmd::props::resize_node(doc, *id, nw.max(0.01), nh.max(0.01))?;
@@ -2063,7 +2115,19 @@ impl Session {
             self.tool.overlay.marquee = None;
             self.cancel_interaction()?;
         }
-        let Some(leaf) = self.hit(&doc, page, ev.p(), ev.tol() * 2.0) else { return Ok(()) };
+        let hit_here = self.hit(&doc, page, ev.p(), ev.tol() * 2.0);
+        // A double-click anywhere on the one selected shape edits its points, like Enter: also
+        // inside a hollow (unfilled) closed shape, where the hit test finds nothing under the
+        // pointer (an open path or a line has no inside: only its stroke counts).
+        if edits
+            && let [id] = sel[..]
+            && doc.node(id).is_some_and(|n| n.kind.is_shape() && figcraft_doc::geometry::is_closed(n))
+            && doc.world_bounds(id).is_some_and(|b| b.contains(ev.p()))
+            && hit_here.is_none_or(|h| h == id || doc.is_ancestor(id, h))
+        {
+            return crate::vectoredit::begin_many(self, &[id]);
+        }
+        let Some(leaf) = hit_here else { return Ok(()) };
         if matches!(self.tool.tool, ToolId::Move | ToolId::Scale) && self.board_double_click(&doc, leaf, &sel)? {
             return Ok(());
         }
@@ -2087,8 +2151,12 @@ impl Session {
             return Ok(());
         }
         // Shapes and vectors: enter vector edit mode (every selected shape, the clicked one active).
-        if edits && doc.node(target).is_some_and(|n| n.kind.is_shape()) && sel.contains(&target) {
-            let mut ids = crate::vectoredit::enter_targets(&doc, &sel).unwrap_or_default();
+        // A shape clicked on its own edits even when the click that selects it and the double-click
+        // arrived in one frame (a press and a release the canvas took together), so no selection was
+        // made yet; another layer's shapes are reached one level at a time, as below.
+        if edits && doc.node(target).is_some_and(|n| n.kind.is_shape()) && (sel.contains(&target) || select_target(&doc, leaf, &sel, false) == target)
+        {
+            let mut ids = if sel.contains(&target) { crate::vectoredit::enter_targets(&doc, &sel).unwrap_or_default() } else { vec![target] };
             ids.retain(|i| *i != target);
             ids.insert(0, target);
             return crate::vectoredit::begin_many(self, &ids);

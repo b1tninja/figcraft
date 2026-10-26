@@ -486,13 +486,20 @@ pub fn bound_field(ui: &mut Ui, id: Id, lead: Lead, rect: Rect, name: &str) -> O
 /// A text field that commits on Enter / focus loss. Returns the new text when committed.
 pub fn text_field(ui: &mut Ui, id: Id, value: &str, width: f32, placeholder: &str) -> Option<String> {
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
-    text_field_in(ui, id, value, rect, placeholder, placeholder)
+    text_field_in(ui, id, value, rect, placeholder, placeholder, false)
 }
 
 /// [`text_field`] without a placeholder, named `name` for screen readers (its label is beside it).
 pub fn text_field_named(ui: &mut Ui, id: Id, value: &str, width: f32, name: &str) -> Option<String> {
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
-    text_field_in(ui, id, value, rect, "", name)
+    text_field_in(ui, id, value, rect, "", name, false)
+}
+
+/// [`text_field_named`] for a secret (a server key): it shows dots, typing included, and screen
+/// readers hear dots too.
+pub fn secret_field_named(ui: &mut Ui, id: Id, value: &str, width: f32, name: &str) -> Option<String> {
+    let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
+    text_field_in(ui, id, value, rect, "", name, true)
 }
 
 /// A multi-line text field across the panel (descriptions, notes) that commits when it loses
@@ -536,7 +543,7 @@ pub fn multiline_field(ui: &mut Ui, id: Id, value: &str, hint: &str, rows: usize
 pub fn combo_field(ui: &mut Ui, id: Id, value: &str, width: f32, options: &[String]) -> Option<String> {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
-    let mut out = text_field_in(ui, id, value, rect, "", "");
+    let mut out = text_field_in(ui, id, value, rect, "", "", false);
     // The chevron sits on top of the field's right end.
     let chev = Rect::from_min_max(pos2(rect.max.x - 18.0, rect.min.y), rect.max);
     let resp = ui.interact(chev, id.with("menu"), Sense::click());
@@ -557,13 +564,14 @@ pub fn combo_field(ui: &mut Ui, id: Id, value: &str, width: f32, options: &[Stri
 }
 
 /// [`text_field`] drawn into `rect`; `name` names it for screen readers.
-fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str, name: &str) -> Option<String> {
+fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str, name: &str, secret: bool) -> Option<String> {
     cancel_retargeted_field_save(ui, id);
     let t = Tokens::get(ui.ctx());
     let editing_id = id.with("editing");
     let mut editing: Option<String> = ui.data(|d| d.get_temp(editing_id));
     let resp = ui.interact(rect, id.with("click"), Sense::click());
-    a11y::text(&resp, name, value);
+    let shown = if secret { std::borrow::Cow::Owned("•".repeat(value.chars().count())) } else { std::borrow::Cow::Borrowed(value) };
+    a11y::text(&resp, name, &shown);
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
     if editing.is_some() {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
@@ -579,7 +587,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
     let mut out = None;
     match editing {
         Some(mut text) => {
-            let r = field_editor(ui, rect, id.with("te"), &mut text, "");
+            let r = field_editor(ui, rect, id.with("te"), &mut text, "", secret);
             a11y::own_focus(&r);
             keep_focus(&r, started);
             crate::shortcuts::release_field_for_save(&r);
@@ -595,7 +603,7 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
             }
         }
         None => {
-            let (s, col) = if value.is_empty() { (placeholder, t.text_tertiary) } else { (value, t.text) };
+            let (s, col) = if value.is_empty() { (placeholder, t.text_tertiary) } else { (&*shown, t.text) };
             // Long text stays inside the field.
             let painter = ui.painter().with_clip_rect(rect.shrink2(vec2(8.0, 0.0)));
             painter.text(pos2(rect.min.x + 8.0, rect.center().y), Align2::LEFT_CENTER, s, regular(11.0), col);
@@ -605,14 +613,15 @@ fn text_field_in(ui: &mut Ui, id: Id, value: &str, rect: Rect, placeholder: &str
 }
 
 /// The editor inside a field's `rect`: one line of text in the field's font, without a frame of
-/// its own (the field draws it), showing `hint` while empty.
-fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str) -> Response {
+/// its own (the field draws it), showing `hint` while empty; `password` shows dots.
+fn field_editor(ui: &mut Ui, rect: Rect, id: Id, text: &mut String, hint: &str, password: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
     let r = child.add(
         egui::TextEdit::singleline(text)
             .id(id)
             .frame(egui::Frame::NONE)
+            .password(password)
             .font(regular(11.0))
             .hint_text(egui::RichText::new(hint).font(regular(11.0)).color(t.text_tertiary))
             .desired_width(rect.width() - 16.0),
@@ -628,7 +637,7 @@ pub fn text_input(ui: &mut Ui, id: Id, text: &mut String, width: f32, hint: &str
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width, FIELD_H), Sense::hover());
     ui.painter().rect_filled(rect, CornerRadius::same(5), t.field);
-    let r = field_editor(ui, rect, id, text, hint);
+    let r = field_editor(ui, rect, id, text, hint, false);
     if r.has_focus() {
         ui.painter().rect_stroke(rect, CornerRadius::same(5), Stroke::new(1.0, crate::theme::ACCENT), StrokeKind::Inside);
     } else if ui.rect_contains_pointer(rect) {
@@ -855,9 +864,19 @@ pub fn disclosure(ui: &mut Ui, label: &str, open: bool) -> bool {
 /// A section header ("Fill", "Stroke"…) with optional right-side icon buttons; returns which
 /// button was clicked. `dim` greys the title (empty sections).
 pub fn section_header(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: bool) -> Option<usize> {
+    section_header_resp(ui, title, buttons, dim).0
+}
+
+/// [`section_header`], with the header's own response for a right-click menu.
+pub fn section_header_resp(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: bool) -> (Option<usize>, egui::Response) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (rect, _) = ui.allocate_exact_size(vec2(w, 40.0), Sense::hover());
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, 40.0), Sense::click());
+    // Only an empty section's header acts as its `+` button; elsewhere it is a right-click target
+    // alone, so it keeps the normal cursor.
+    if resp.hovered() && !dim {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+    }
     ui.painter().text(
         pos2(rect.min.x + PAD, rect.center().y),
         Align2::LEFT_CENTER,
@@ -879,7 +898,11 @@ pub fn section_header(ui: &mut Ui, title: &str, buttons: &[(Icon, &str)], dim: b
         }
         x -= 24.0;
     }
-    out
+    // An empty section's whole header adds its item, not only its `+` button.
+    if out.is_none() && dim && resp.clicked() {
+        out = buttons.iter().position(|(icon, _)| *icon == Icon::Plus);
+    }
+    (out, resp)
 }
 
 /// An icon button at `rect` (hover highlight, tooltip); true when clicked.

@@ -17,6 +17,9 @@ const GLYPH: f32 = 18.0;
 /// The flyout carets: smaller than the marks, but on a box whose stroke rounds to the same width
 /// as theirs at 1×, 1.5× and 2× (a 10-point box drew them one physical pixel thinner).
 const CARET: f32 = 14.0;
+/// A flyout caret's button: wide enough to hit, a little clear of its tool's (#988).
+const FLYOUT_W: f32 = 16.0;
+const FLYOUT_GAP: f32 = 2.0;
 
 /// `GLYPH`'s box centred in `r`.
 fn glyph_rect(r: Rect) -> Rect {
@@ -130,7 +133,7 @@ pub(crate) fn bar_width(app: &FigApp) -> f32 {
 /// Actions, and the mode switcher (boards: the Design panel's button instead).
 fn main_width(groups: &[Group], board: bool) -> f32 {
     let (cell, gap) = (TOOL_CELL, 4.0);
-    let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * 10.0;
+    let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * (FLYOUT_GAP + FLYOUT_W);
     let end = if board { cell + 16.0 } else { 4.0 * 34.0 + 24.0 };
     groups.len() as f32 * (cell + gap) + carets + 2.0 * (cell + gap) + 16.0 + end
 }
@@ -139,9 +142,13 @@ fn main_width(groups: &[Group], board: bool) -> f32 {
 /// Draw · Design · Prototype · Inspect mode switcher (on a board, the Design panel's button).
 fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: bool) {
     let groups = if board { BOARD_GROUPS } else { GROUPS };
-    let rect = pill(ui, &mut app.ui.nav, canvas, main_width(groups, board), t);
+    let width = main_width(groups, board);
+    let rect = pill(ui, &mut app.ui.nav, canvas, width, t);
     let cy = rect.center().y;
-    let mut x = rect.min.x + 8.0;
+    let scroll = pill_scroll(ui, rect, width);
+    let outer_clip = ui.clip_rect();
+    ui.set_clip_rect(rect.intersect(outer_clip));
+    let mut x = rect.min.x + 8.0 - scroll;
     for g in groups {
         x = group_cell(app, ui, g, pos2(x, cy), rect.min.y, t);
     }
@@ -158,7 +165,23 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     } else {
         mode_switcher(app, ui, x, cy, t);
     }
-    help_button(app, ui, canvas, t);
+    ui.set_clip_rect(outer_clip);
+    help_button(app, ui, canvas, rect, t);
+}
+
+/// How far the buttons of a pill `width` wide drawn at `rect` are scrolled: wider than the pill (a
+/// phone), they slide sideways under a drag or the wheel.
+fn pill_scroll(ui: &Ui, rect: Rect, width: f32) -> f32 {
+    let scroll_id = ui.scope_id().with("tb_scroll");
+    let max_scroll = (width - rect.width()).max(0.0);
+    let mut scroll = 0.0;
+    if max_scroll > 0.0 {
+        let drag = ui.ctx().read_response(ui.scope_id().with("pill")).map_or(0.0, |r| r.drag_delta().x);
+        let wheel = if ui.rect_contains_pointer(rect) { ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y) } else { 0.0 };
+        scroll = (ui.data(|d| d.get_temp::<f32>(scroll_id)).unwrap_or(0.0) - drag - wheel).clamp(0.0, max_scroll);
+    }
+    ui.data_mut(|d| d.insert_temp(scroll_id, scroll));
+    scroll
 }
 
 /// A toolbar button's size.
@@ -190,7 +213,7 @@ fn group_cell(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, top: f32
     let mut x = at.x + TOOL_CELL;
     if g.has_flyout() {
         flyout_caret(app, ui, g, pos2(x, at.y), t);
-        x += 10.0;
+        x += FLYOUT_GAP + FLYOUT_W;
     }
     if app.ui.tool_flyout == Some(g.key) {
         if g.options == Options::None {
@@ -205,7 +228,7 @@ fn group_cell(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, top: f32
 /// The caret after group `g`'s button (at `at`, its left edge and middle): opens or closes its
 /// flyout.
 fn flyout_caret(app: &mut FigApp, ui: &mut Ui, g: &Group, at: egui::Pos2, t: &Tokens) {
-    let cr = Rect::from_center_size(pos2(at.x + 5.0, at.y), vec2(10.0, TOOL_CELL));
+    let cr = Rect::from_min_size(pos2(at.x + FLYOUT_GAP, at.y - TOOL_CELL / 2.0), vec2(FLYOUT_W, TOOL_CELL));
     let cresp = ui.interact(cr, ui.scope_id().with(("flyout", g.key)), Sense::click());
     let open = app.ui.tool_flyout == Some(g.key);
     a11y::menu_button(&cresp, tr(g.name), open);
@@ -300,8 +323,12 @@ fn pick_mode(app: &mut FigApp, i: usize) {
 }
 
 /// The floating help button at the bottom right of the canvas.
-fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens) {
-    let hr = Rect::from_center_size(pos2(canvas.max.x - 32.0, canvas.max.y - 32.0), vec2(32.0, 32.0));
+fn help_button(app: &mut FigApp, ui: &mut Ui, canvas: Rect, pill: Rect, t: &Tokens) {
+    let mut hr = Rect::from_center_size(pos2(canvas.max.x - 32.0, canvas.max.y - 32.0), vec2(32.0, 32.0));
+    // Above the pill when they'd overlap (a narrow window).
+    if hr.intersects(pill) {
+        hr = hr.translate(vec2(0.0, -(pill.height() + 12.0)));
+    }
     let hresp = ui.interact(hr, ui.scope_id().with("help"), Sense::click()).tip(tr("Help and resources"));
     ui.painter().circle_filled(hr.center() + vec2(0.0, 1.0), 17.0, Color32::from_black_alpha(20));
     ui.painter().circle_filled(hr.center(), 16.0, t.panel);
@@ -444,7 +471,9 @@ fn builder_toolbar(app: &mut FigApp, ui: &mut Ui) {
 }
 
 /// Where a toolbar pill `width` wide sits: centred 12 px above the canvas's bottom edge.
+/// (Never wider than the canvas less a margin: on a phone the main toolbar scrolls inside it.)
 pub(crate) fn pill_rect(canvas: Rect, width: f32) -> Rect {
+    let width = width.min((canvas.width() - 16.0).max(0.0));
     Rect::from_center_size(pos2(canvas.center().x, canvas.max.y - 12.0 - 24.0), vec2(width, 48.0))
 }
 
@@ -605,6 +634,18 @@ pub fn pretty_shortcut(s: &str) -> String {
 mod tests {
     use super::*;
     use egui::Shape;
+
+    #[test]
+    fn pill_never_outgrows_a_phone_canvas() {
+        let full = main_width(GROUPS, false);
+        let phone = Rect::from_min_size(pos2(0.0, 0.0), vec2(375.0, 700.0));
+        let pill = pill_rect(phone, full);
+        assert!(pill.width() <= phone.width() - 16.0 && pill.min.x >= 8.0 && pill.max.x <= phone.max.x - 8.0, "{pill:?}");
+        // A desktop canvas keeps the full width, and a degenerate one doesn't go negative.
+        let wide = Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 800.0));
+        assert_eq!(pill_rect(wide, full).width(), full);
+        assert_eq!(pill_rect(Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 4.0)), full).width(), 0.0);
+    }
 
     /// The stroke widths `icon` paints with in a `size` box at `ppp` pixels per point.
     fn widths(ppp: f32, icon: Icon, size: f32) -> Vec<f32> {
