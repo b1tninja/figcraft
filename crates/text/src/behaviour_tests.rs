@@ -266,6 +266,28 @@ fn hangul_comes_from_a_korean_font_when_one_is_installed() {
 }
 
 #[test]
+fn symbols_come_from_a_symbol_font_when_one_is_installed() {
+    // ⌖ (U+2316) and ⤒ (U+2912) are in no Latin text face. With a symbol font that has them (Apple
+    // Symbols on macOS, Segoe UI Symbol on Windows, Noto Sans Symbols 2 and Noto Sans Math on
+    // Linux) the fallback draws them instead of the missing-glyph box (#1156). Each character
+    // skips on a machine with no installed fallback family that has it.
+    let Some(f) = face() else { return };
+    let families = ["Apple Symbols", "Segoe UI Symbol", "Noto Sans Symbols", "Noto Sans Symbols 2", "Noto Sans Symbols2", "Noto Sans Math"];
+    for c in ['\u{2316}', '\u{2912}'] {
+        if f.has_char(c) || !families.iter().any(|k| find_face(k, "Regular").is_some_and(|k| k.has_char(c))) {
+            continue;
+        }
+        let t = text(&format!("A {c}"), TextAutoResize::WidthAndHeight);
+        let l = layout(&t, None, None);
+        let drawn: Vec<_> = l.glyphs.iter().filter(|g| g.char_start == 2).collect();
+        assert!(!drawn.is_empty(), "U+{:04X} has a glyph", c as u32);
+        for g in drawn {
+            assert!(g.face.has_char(c), "U+{:04X} drawn by {} {}, which lacks it", c as u32, g.face.family, g.face.style);
+        }
+    }
+}
+
+#[test]
 fn break_opportunities() {
     // (before, after, may break between, derivation)
     let cases: [(char, char, bool, &str); 22] = [
@@ -359,6 +381,18 @@ fn grapheme_clusters() {
     assert_eq!(starts.len(), s.chars().count());
     assert_eq!(starts.iter().filter(|b| **b).count(), stops.len() - 1);
     assert!(grapheme_starts("plain ascii").iter().all(|b| *b));
+}
+
+#[test]
+fn backspace_removes_marks_but_keeps_other_graphemes_atomic() {
+    assert_eq!(crate::backspace_step("น้ำ", 3), 2); // Thai spacing mark
+    assert_eq!(crate::backspace_step("e\u{0301}", 2), 1); // Latin combining mark
+    assert_eq!(crate::backspace_step("👨‍👩‍👧", 5), 0); // Emoji ZWJ sequence
+    assert_eq!(crate::backspace_step("🇯🇵", 2), 0); // Flag
+    assert_eq!(crate::backspace_step("x", 1), 0); // Ordinary character
+    assert_eq!(crate::backspace_step("\u{1112}\u{1161}\u{11AB}", 3), 0); // Hangul syllable as conjoining jamo
+    assert_eq!(crate::backspace_step("a\u{200D}", 2), 0); // A letter ending in ZWJ
+    assert_eq!(crate::backspace_step("1\u{FE0F}\u{20E3}", 3), 0); // Keycap
 }
 
 #[test]

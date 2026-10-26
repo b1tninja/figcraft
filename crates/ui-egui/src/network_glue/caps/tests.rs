@@ -1,5 +1,4 @@
 use super::*;
-use craft_ui::capability::{Advertised, Choices};
 use craft_ui::printing::network::{Draft, Failure, FailureKind, PrinterSummary};
 
 fn details() -> PrinterDetails {
@@ -48,7 +47,7 @@ fn colour_none_some_true_some_false() {
 fn copies_are_a_range_from_the_maximum() {
     let copies = |max_copies| caps_from_details(&PrinterDetails { max_copies, ..details() }, vec![], Listed::default()).copies;
     assert_eq!(copies(None), Capability::Unknown);
-    assert_eq!(copies(Some(10)), Capability::Supported(Advertised { choices: Choices::Range { min: 1, max: 10 }, default: None }));
+    assert_eq!(copies(Some(10)), Capability::from_option_range(Some((1, 10))));
     assert!(!copies(Some(0)).is_enabled(), "a maximum of zero is not a choice");
 }
 

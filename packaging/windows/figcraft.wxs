@@ -18,6 +18,9 @@
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?ifndef HasCraftFontLicences ?>
+  <?define HasCraftFontLicences=0 ?>
+  <?endif ?>
   <Package
       Name="FigCraft"
       Manufacturer="Learning Machines LLC"
@@ -52,6 +55,9 @@
     </Property>
 
     <Feature Id="Main" Title="FigCraft" Level="1">
+      <?if $(var.HasCraftFontLicences) = 1 ?>
+      <ComponentGroupRef Id="CraftFontLicences" />
+      <?endif ?>
       <ComponentGroupRef Id="FigcraftFiles" />
     </Feature>
 
@@ -82,8 +88,14 @@
   </Package>
 
   <Fragment>
+    <?if $(var.HasCraftFontLicences) = 1 ?>
+    <ComponentGroup Id="CraftFontLicences" Directory="INSTALLFOLDER">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
+    <?endif ?>
     <ComponentGroup Id="FigcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="FigcraftApp" Guid="238228C3-4C1D-4B33-8C5D-C31B65BC2DA4">
+        <File Id="FigcraftNotice" Source="$(var.BinDir)\NOTICE" KeyPath="no" />
         <File Id="FigcraftExe" Source="$(var.BinDir)\figcraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="FigCraft"
               Description="FigCraft interface design and prototyping" WorkingDirectory="INSTALLFOLDER" Advertise="yes"

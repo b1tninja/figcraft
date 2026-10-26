@@ -343,6 +343,20 @@ pub(crate) fn put<W: Write + Seek>(
     z.write_all(bytes).map_err(io_err)
 }
 
+/// `files` (name, bytes; a `/` in a name makes a folder) as one zip archive: several exports
+/// delivered as a single download (#969).
+pub fn zip_files<'a>(files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Vec<u8>, FormatError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut z = zip::ZipWriter::new(&mut buf);
+        for (name, bytes) in files {
+            put(&mut z, name, zip::write::SimpleFileOptions::default(), bytes)?;
+        }
+        z.finish().map_err(io_err)?;
+    }
+    Ok(buf.into_inner())
+}
+
 /// Add `doc` as a `document.json`-style member, serialized straight into the compressor.
 fn put_json<W: Write + Seek>(z: &mut zip::ZipWriter<W>, name: &str, doc: &Document) -> Result<(), FormatError> {
     z.start_file(name, json_options()).map_err(io_err)?;
@@ -524,10 +538,18 @@ fn read_images<R: Read + Seek>(
     own: Option<&BTreeSet<String>>,
     budget: ImageBudget,
 ) -> (BTreeMap<String, ImageData>, Vec<(String, FormatError)>) {
-    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).map(str::to_string).collect();
+    let mut hashes: Vec<String> = z.file_names().filter_map(|n| n.strip_prefix("images/")).filter(|h| !h.is_empty()).map(str::to_string).collect();
     hashes.sort_by_key(|h| !own.is_some_and(|o| o.contains(h)));
     let mut images = BTreeMap::new();
     let mut unread = Vec::new();
+    // Member names that aren't plain hashes (`../x`, `a/b`) are never read, so never written back.
+    hashes.retain(|h| {
+        let ok = library::is_valid_hash(h);
+        if !ok {
+            unread.push((h.clone(), FormatError::Corrupt("its name isn't a valid image hash".to_string())));
+        }
+        ok
+    });
     let mut left = budget.bytes;
     for (i, hash) in hashes.into_iter().enumerate() {
         let name = format!("images/{hash}");

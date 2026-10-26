@@ -114,7 +114,7 @@ impl NetTasks {
         let (transport, ctx, stations) = (self.transport.clone(), ui.ctx().clone(), Arc::clone(&self.stations));
         let query = self.query.get_or_insert_with(|| query_printer(transport, Some(ctx), stations));
         let host = net::Host { validate: &validate, query, sheets_ok, formats: FORMATS };
-        let response = self.state.show(ui, egui::Id::new("network-printer"), &host, &labels());
+        let response = self.state.show(ui, egui::Id::unique("network-printer"), &host, &labels());
         status_block(ui, &self.tracked, false);
         response
     }

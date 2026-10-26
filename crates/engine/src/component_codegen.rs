@@ -109,14 +109,14 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// Code for any layer in React, Leptos, SwiftUI or Compose: an instance's call and its component's
 /// definition, a component's (or set's) definition, or the layer tree (React and Leptos wrap it
-/// in a function component).
+/// in a function component), with the imports of the connected components it calls at the top.
 pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
     let Some(n) = doc.node(id) else { return String::new() };
     if let Some(code) = crate::code_connect::link(doc, id, lang).and_then(|l| crate::code_connect::connected_code(doc, id, lang, l)) {
         return code;
     }
     let comp = main_of(doc, id).and_then(|m| describe(doc, m));
-    match (&n.kind, comp) {
+    let code = match (&n.kind, comp) {
         (NodeKind::Instance { .. }, Some(c)) => format!("{}\n{}", usage(doc, id, lang, 0).unwrap_or_default(), definition(doc, &c, lang)),
         (NodeKind::Component { .. } | NodeKind::ComponentSet { .. }, Some(c)) => definition(doc, &c, lang),
         _ => match lang {
@@ -135,7 +135,8 @@ pub fn code(doc: &Document, id: NodeId, lang: CodeLang) -> String {
                 out
             }
         },
-    }
+    };
+    crate::code_connect::with_imports(&crate::code_connect::tree_imports(doc, id, lang), code)
 }
 
 fn is_component(doc: &Document, id: NodeId) -> bool {
@@ -224,7 +225,9 @@ pub fn type_name(name: &str) -> String {
 /// Words no generated parameter may be called (keywords of TypeScript, Swift and Kotlin, and
 /// names the generated code uses).
 const RESERVED: &[&str] = &[
+    "arguments",
     "as",
+    "await",
     "body",
     "break",
     "case",
@@ -238,6 +241,7 @@ const RESERVED: &[&str] = &[
     "do",
     "else",
     "enum",
+    "eval",
     "export",
     "extends",
     "extension",
@@ -248,6 +252,7 @@ const RESERVED: &[&str] = &[
     "function",
     "guard",
     "if",
+    "implements",
     "import",
     "in",
     "init",
@@ -263,6 +268,7 @@ const RESERVED: &[&str] = &[
     "operator",
     "package",
     "private",
+    "protected",
     "protocol",
     "public",
     "ref",
@@ -521,8 +527,7 @@ pub fn usage(doc: &Document, id: NodeId, lang: CodeLang, depth: usize) -> Option
     let c = main_of(doc, id).and_then(|m| describe(doc, m))?;
     let values = instance_values(doc, id, &c)?;
     let pad = if lang == CodeLang::React { "  ".repeat(depth) } else { indent(depth) };
-    // A connected component: its real snippet. shortcut: inside a layer tree it brings no import
-    // line; collect them at the top of the tree's code when people ask for it.
+    // A connected component: its real snippet (its import is at the top of the code: `code`).
     if let Some(link) = crate::code_connect::link(doc, id, lang) {
         return Some(crate::code_connect::render(doc, &c, &values, link, lang, &pad));
     }

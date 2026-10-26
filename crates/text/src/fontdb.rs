@@ -405,8 +405,10 @@ fn names(f: &skrifa::FontRef) -> (Option<String>, Option<String>) {
     (family, style)
 }
 
-/// Families tried, in order, for characters a text's own font lacks.
-const FALLBACK_FAMILIES: [&str; 20] = [
+/// Families tried, in order, for characters a text's own font lacks. The symbol fonts come last:
+/// Apple Symbols (macOS), Segoe UI Symbol (Windows) and the Noto symbol and math fonts (Linux), for
+/// signs such as ⌖ and ⤒ that no text face has.
+const FALLBACK_FAMILIES: [&str; 24] = [
     "Inter",
     "Helvetica Neue",
     "Arial",
@@ -427,6 +429,10 @@ const FALLBACK_FAMILIES: [&str; 20] = [
     "Noto Sans Arabic",
     "Apple Symbols",
     "Segoe UI Symbol",
+    "Noto Sans Symbols",
+    "Noto Sans Symbols 2",
+    "Noto Sans Symbols2",
+    "Noto Sans Math",
 ];
 
 /// A system font file entry not yet loaded.
@@ -812,7 +818,7 @@ fn scan_dir(dir: &std::path::Path, depth: usize, out: &mut BTreeMap<String, (Str
         if !meta.is_file() {
             continue;
         }
-        let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).unwrap_or_default();
         if !matches!(ext.as_str(), "ttf" | "otf" | "ttc" | "otc") {
             continue;
         }

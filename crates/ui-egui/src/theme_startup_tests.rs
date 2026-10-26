@@ -83,3 +83,20 @@ fn unavailable_system_theme_uses_the_existing_light_fallback() {
     frame(&ctx, &mut app, None);
     assert_eq!(Tokens::get(&ctx), Tokens::light());
 }
+
+/// Checks that the test graph enables egui's `default_fonts` and `monochrome_emoji_fonts`
+/// features by asserting both a Latin and an emoji glyph are available.
+#[test]
+fn tests_have_the_explicit_default_and_monochrome_emoji_font_features() {
+    // 0.37 egui has no default features, and kittest's own dev-features do not propagate to this
+    // crate. The test graph must therefore enable `default_fonts` and `monochrome_emoji_fonts`
+    // explicitly (Cargo.toml), or strict glyph tests would silently draw tofu.
+    let ctx = Context::default();
+    let mut app = FigApp::new(Session::empty(), Box::new(NoServices));
+    frame(&ctx, &mut app, Some(Theme::Light));
+    frame(&ctx, &mut app, Some(Theme::Light));
+    ctx.fonts_mut(|f| {
+        assert!(f.has_glyphs(&crate::theme::regular(11.0), "A"), "default Latin fallback");
+        assert!(f.has_glyphs(&crate::theme::regular(11.0), "\u{1F600}"), "monochrome emoji fixture glyph");
+    });
+}

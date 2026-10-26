@@ -27,7 +27,7 @@ figcraft-pathops = { workspace = true }
 figcraft-engine = { workspace = true }
 figcraft-format = { workspace = true }
 figcraft-pdf = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -41,6 +41,7 @@ craft-ui = { workspace = true }
 # Printing: the system spooler and the network backends. Not built for the web (no spooler, no sockets).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-print = { workspace = true }
+craft-update = { workspace = true }
 
 [build-dependencies]
 serde_json = { workspace = true }
@@ -50,3 +51,6 @@ toml = "1"
 wat = { workspace = true }
 # The in-process fake WS-Print and IPP printers for the network print tests (`craft_print::wsd::testing`).
 craft-print = { workspace = true, features = ["wsd", "ipp", "testing"] }
+# Keep the test font features explicit; production uses the same bundled fallback faces.
+# Dependency dev-features do not propagate into app release builds.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }

@@ -390,7 +390,10 @@ image sizes) and refuses it if anything is off.
 `cargo xtask plugins` (part of `cargo xtask wasm` and `cargo xtask ci`; it needs the
 `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`) checks, tests and
 builds them, and leaves each example's manifest and module side by side in
-`target/plugins/dist/<example>/`, ready to import.
+`target/plugins/dist/<example>/`, ready to import. With `CARGO_TARGET_DIR` set, that location is
+`$CARGO_TARGET_DIR/plugins/dist/<example>/`. Plugin compilation and host tests use the caller's
+same Cargo target directory; wasm modules are built under its `wasm32-unknown-unknown/release/`
+directory. The plugin workspace keeps its own lockfile and release profile.
 
 A plugin of your own:
 

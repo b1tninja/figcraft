@@ -81,8 +81,8 @@ pub(crate) fn field_value(app: &FigApp, plugin: &str, control: &str) -> Option<S
 /// open, else its panel), as last drawn.
 pub(crate) fn field_window(app: &FigApp, ctx: &Context, plugin: &str) -> Option<egui::Rect> {
     let id = match &app.ui.plugin_form {
-        Some(f) if f.id == plugin => Id::new("plugin_form"),
-        _ => Id::new(("plugin_panel", plugin)),
+        Some(f) if f.id == plugin => Id::unique("plugin_form"),
+        _ => Id::unique(("plugin_panel", plugin)),
     };
     ctx.memory(|m| m.area_rect(id))
 }
@@ -206,7 +206,7 @@ fn panel_windows(app: &mut FigApp, ctx: &Context) {
         let mut used = None;
         // Side by side leftwards from the properties panel, three to a row.
         let at = egui::pos2(right - PANEL_STEP * (i % 3) as f32, 52.0 + 28.0 * (i / 3) as f32);
-        floating(open.title(), ctx).id(Id::new(("plugin_panel", id))).pivot(Align2::RIGHT_TOP).default_pos(at).open(&mut keep).show(ctx, |ui| {
+        floating(open.title(), ctx).id(Id::unique(("plugin_panel", id))).pivot(Align2::RIGHT_TOP).default_pos(at).open(&mut keep).show(ctx, |ui| {
             ui.set_width(320.0);
             used = controls(ui, id, &open.panel.controls, &open.values, &t);
         });
@@ -245,12 +245,15 @@ const INSTALL: &str = "plugin.directory.install";
 const MANAGE_W: f32 = 400.0;
 const ROW_TEXT_W: f32 = 300.0;
 
+/// Draw the Plugins window with installed and browse tabs, dispatching remove, import,
+/// browse, confirm and stop actions; closing the window cancels its directory requests and
+/// clears confirmation.
 fn manage_window(app: &mut FigApp, ctx: &Context) {
     let t = Tokens::get(ctx);
     let mut open = true;
     let mut asked = None;
     let mut tab = app.ui.plugins_manage.tab;
-    window(tr("Plugins"), ctx).id(Id::new("Plugins")).open(&mut open).show(ctx, |ui| {
+    window(tr("Plugins"), ctx).id(Id::unique("Plugins")).open(&mut open).show(ctx, |ui| {
         ui.set_width(MANAGE_W);
         tab_strip(ui, &t, &PluginsTab::ALL, PluginsTab::label, &mut tab);
         ui.add_space(12.0);
@@ -326,7 +329,7 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
         // The field commits on Enter (which also browses) or when Browse takes the focus.
         let mut enter = false;
         if let Some(s) =
-            widgets::text_field(ui, Id::new("plugin_directory_server"), &server, MANAGE_W - 90.0, tr("Server address (ws://host:47900/)"))
+            widgets::text_field(ui, Id::unique("plugin_directory_server"), &server, MANAGE_W - 90.0, tr("Server address (ws://host:47900/)"))
         {
             enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             server = s.clone();
@@ -351,7 +354,7 @@ fn browse_tab(app: &mut FigApp, ui: &mut Ui, t: &Tokens) -> Option<Manage> {
         return asked;
     };
     ui.add_space(8.0);
-    if let Some(q) = widgets::text_field(ui, Id::new("plugin_directory_query"), &app.ui.plugins_manage.query, MANAGE_W, tr("Search plugins")) {
+    if let Some(q) = widgets::text_field(ui, Id::unique("plugin_directory_query"), &app.ui.plugins_manage.query, MANAGE_W, tr("Search plugins")) {
         app.ui.plugins_manage.query = q;
     }
     ui.add_space(8.0);
@@ -432,7 +435,7 @@ fn confirm_window(app: &mut FigApp, ctx: &Context, t: &Tokens) {
     let installing = app.session.waiting_for(INSTALL);
     let title = if update { tr("Update plugin") } else { tr("Install plugin") };
     let (mut open, mut install, mut cancel) = (true, false, false);
-    window(title, ctx).id(Id::new("plugin_install_confirm")).open(&mut open).show(ctx, |ui| {
+    window(title, ctx).id(Id::unique("plugin_install_confirm")).open(&mut open).show(ctx, |ui| {
         ui.set_width(340.0);
         ui.label(RichText::new(format!("{} {}", e.name, e.version)).font(semibold(13.0)).color(t.text));
         widgets::label(ui, &trf("From {server}", &[("server", &server)]), t.text_secondary);
@@ -509,6 +512,8 @@ fn summary(p: &InstalledPlugin) -> String {
     parts.join(" · ")
 }
 
+/// Draw a plugin command's parameter form: close it when the plugin or command disappeared,
+/// edit values and colour picks, run `plugin.run` on Run, and close on Cancel.
 fn form_window(app: &mut FigApp, ctx: &Context) {
     let Some(mut form) = app.ui.plugin_form.clone() else { return };
     let Some((name, command)) = app
@@ -529,7 +534,7 @@ fn form_window(app: &mut FigApp, ctx: &Context) {
     let mut pick = None;
     let label = command.label.trim_end_matches(['…', '.']).trim();
     let title = if label.contains(name.as_str()) { label.to_string() } else { format!("{name}: {label}") };
-    window(&title, ctx).id(Id::new("plugin_form")).open(&mut open).show(ctx, |ui| {
+    window(&title, ctx).id(Id::unique("plugin_form")).open(&mut open).show(ctx, |ui| {
         ui.set_width(320.0);
         match controls(ui, &format!("{}/{}", form.id, form.command), &command.params, &form.values, &t) {
             Some(Used::Set(name, v)) => {
@@ -586,7 +591,7 @@ fn controls(ui: &mut Ui, salt: &str, params: &[Param], values: &Map<String, Valu
                 }
                 _ => {
                     let current = values.get(&p.name).cloned().unwrap_or_else(|| p.default_value());
-                    field(ui, Id::new(("plugin_control", salt, &p.name)), p, &current)
+                    field(ui, Id::unique(("plugin_control", salt, &p.name)), p, &current)
                 }
             };
             if hit.is_some() {
@@ -643,7 +648,8 @@ fn field(ui: &mut Ui, id: Id, p: &Param, current: &Value) -> Option<Used> {
             let (picked, typed) = ui
                 .horizontal(|ui| {
                     let color = figcraft_color::Color::from_hex(hex).unwrap_or(figcraft_color::Color::BLACK);
-                    let picked = widgets::swatch(ui, &figcraft_color::Paint::solid(color), widgets::FIELD_H).clicked();
+                    let label = format!("{name} {}", tr("Color"));
+                    let picked = widgets::swatch_named(ui, &figcraft_color::Paint::solid(color), widgets::FIELD_H, &label).clicked();
                     (picked, widgets::text_field_named(ui, id, hex, FIELD_W - widgets::FIELD_H - 8.0, name).and_then(|s| p.coerce(&json!(s)).ok()))
                 })
                 .inner;

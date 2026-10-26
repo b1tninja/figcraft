@@ -61,7 +61,7 @@ const CANVAS_ACCENT: &str = "figcraft-canvas-accent";
 /// whichever green contrasts more with it: the bright one on a dark page, the darker on a light one.
 pub fn set_canvas_page(ctx: &Context, page: Color32) {
     let pick = if c(BRAND).contrast(c(page)) > c(ACCENT).contrast(c(page)) { BRAND } else { ACCENT };
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new(CANVAS_ACCENT), pick));
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(CANVAS_ACCENT), pick));
 }
 
 /// `x` (opaque) as a document colour, for its contrast with another.
@@ -71,7 +71,7 @@ fn c(x: Color32) -> figcraft_color::Color {
 
 /// The green for overlays drawn on the page ([`set_canvas_page`]); [`ACCENT`] before a page shows.
 pub fn canvas_accent(ctx: &Context) -> Color32 {
-    ctx.data(|d| d.get_temp(egui::Id::new(CANVAS_ACCENT))).unwrap_or(ACCENT)
+    ctx.data(|d| d.get_temp(egui::Id::unique(CANVAS_ACCENT))).unwrap_or(ACCENT)
 }
 
 /// A fill under white text: the darker green stands in for the bright one.
@@ -173,8 +173,9 @@ impl Tokens {
     }
 }
 
+/// Stable id for temporary theme tokens.
 fn tokens_id() -> egui::Id {
-    egui::Id::new("figcraft_tokens")
+    egui::Id::unique("figcraft_tokens")
 }
 
 /// egui's default for how long hover fades and openings animate.
@@ -268,6 +269,9 @@ pub fn on_dark<R>(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui) -> R) -> R {
 /// otherwise egui's defaults. With
 /// `system`, also system faces for scripts those lack (Hebrew, joined Arabic) so names in them show,
 /// and faces for the CJK scripts in `cjk` ([`crate::cjk`]).
+///
+/// The craft-fonts set embeds Noto Sans Arabic and Noto Sans Hebrew; with `system` off those
+/// built-in faces are the whole RTL fallback, so tests and releases do not depend on installed fonts.
 pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
     let mut fonts = FontDefinitions::default();
     let find = |family: &str, style: &str| figcraft_text::CRAFT_FONTS.iter().find(|f| f.family == family && f.style == style).map(|f| f.bytes);
@@ -304,7 +308,7 @@ pub fn install_fonts(ctx: &Context, system: bool, cjk: u8) {
     brand.extend(fonts.families.get(&FontFamily::Name("semibold".into())).cloned().unwrap_or_default());
     fonts.families.insert(FontFamily::Name("brand".into()), brand);
     // CJK and other scripts from craft-fonts as fallbacks (Noto Sans CJK only with FIGCRAFT_EMBED_CJK).
-    const BUILT_IN: [&str; 5] = ["Inter", "BIZ UDPGothic", "Noto Sans CJK SC", "Noto Sans Arabic", "Noto Sans Georgian"];
+    const BUILT_IN: [&str; 6] = ["Inter", "BIZ UDPGothic", "Noto Sans CJK SC", "Noto Sans Arabic", "Noto Sans Hebrew", "Noto Sans Georgian"];
     let lang = crate::i18n::current().map_or("en", |l| l.code);
     // A Chinese UI draws Han in a Chinese face: the built-in Japanese one goes after the system faces.
     let late = |family: &str| family == "BIZ UDPGothic" && crate::cjk::language(lang) == crate::cjk::HAN;
@@ -415,7 +419,7 @@ pub fn paint_app_icon(ui: &egui::Ui, rect: egui::Rect) {
         crate::icons::paint(ui.painter(), rect.shrink(rect.width() * 0.22), crate::icons::Icon::Logo, ACCENT_ON);
         return;
     };
-    let id = egui::Id::new("figcraft_original_app_icon");
+    let id = egui::Id::unique("figcraft_original_app_icon");
     let texture = ui.ctx().data(|data| data.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
         let texture = ui.ctx().load_texture("figcraft-original-app-icon", image.clone(), egui::TextureOptions::LINEAR);
         ui.ctx().data_mut(|data| data.insert_temp(id, texture.clone()));
@@ -433,8 +437,9 @@ pub fn c32(c: figcraft_color::Color) -> Color32 {
     Color32::from_rgba_unmultiplied(r, g, b, a)
 }
 
+/// Stable id for the current document-to-screen colour conversion.
 fn screen_conversion_id() -> egui::Id {
-    egui::Id::new("figcraft_screen_conversion")
+    egui::Id::unique("figcraft_screen_conversion")
 }
 
 /// Remember the colour profile of the document on screen (once per frame): document colours drawn

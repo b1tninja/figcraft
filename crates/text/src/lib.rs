@@ -13,7 +13,7 @@ pub mod fontdb;
 mod layout;
 mod onpath;
 
-pub use breaks::grapheme_step;
+pub use breaks::{backspace_step, grapheme_step};
 pub use color::{ColorBitmap, ColorInk, ColorLayer};
 pub use fontdb::{
     Axis, CRAFT_FONTS, Coords, Face, FontDb, NamedInstance, Rescan, axis_label, db, face_with_char, family_names, family_styles, find_face,
@@ -42,7 +42,7 @@ struct LayoutCache {
 
 /// Layouts kept before the cache starts over (a page of distinct texts stays cached while it
 /// renders, pans and zooms).
-const LAYOUT_CACHE_MAX: usize = 32_768;
+const LAYOUT_CACHE_MAX: usize = 4_096;
 /// Entries per fingerprint (texts that compare unequal to themselves, e.g. NaN sizes, can't pile up).
 const BUCKET_MAX: usize = 8;
 
