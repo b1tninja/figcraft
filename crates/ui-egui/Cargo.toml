@@ -17,6 +17,7 @@ default = ["network-print"]
 network-print = ["craft-print/wsd", "craft-print/ipp"]
 
 [dependencies]
+craft-ui = { workspace = true }
 figcraft-geom = { workspace = true }
 figcraft-color = { workspace = true }
 figcraft-doc = { workspace = true }
@@ -36,7 +37,6 @@ base64 = { workspace = true }
 image = { workspace = true }
 egui_extras = { workspace = true }
 web-time = "1.1.0"
-craft-ui = { workspace = true }
 
 # Printing: the system spooler and the network backends. Not built for the web (no spooler, no sockets).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

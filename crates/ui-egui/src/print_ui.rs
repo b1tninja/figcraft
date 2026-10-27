@@ -394,7 +394,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
             ui.label(tr("Paper:"));
             let paper_text = p.paper.and_then(|i| PAPERS.get(i)).map_or_else(|| tr("Frame size").to_owned(), |paper| tr(paper.name).to_owned());
             let paper_before = p.paper;
-            egui::ComboBox::from_id_salt("print_paper").selected_text(paper_text).show_ui(ui, |ui| {
+            craft_ui::ComboBox::from_id_salt("print_paper").selected_text(paper_text).show_ui(ui, |ui| {
                 ui.selectable_value(&mut p.paper, None, tr("Frame size"));
                 for (i, paper) in PAPERS.iter().enumerate() {
                     ui.selectable_value(&mut p.paper, Some(i), tr(paper.name));
@@ -414,7 +414,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 FitOrientation::Landscape => tr("Landscape"),
             };
             ui.add_enabled_ui(p.paper.is_some(), |ui| {
-                egui::ComboBox::from_id_salt("print_orientation").selected_text(orientation).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("print_orientation").selected_text(orientation).show_ui(ui, |ui| {
                     ui.selectable_value(&mut p.orientation, FitOrientation::Auto, tr("Automatic (by the frame's shape)"));
                     ui.selectable_value(&mut p.orientation, FitOrientation::Portrait, tr("Portrait"));
                     ui.selectable_value(&mut p.orientation, FitOrientation::Landscape, tr("Landscape"));
@@ -429,7 +429,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
                 FitScale::Fill => tr("Fit to the page"),
             };
             ui.add_enabled_ui(p.paper.is_some(), |ui| {
-                egui::ComboBox::from_id_salt("print_scale").selected_text(scale).show_ui(ui, |ui| {
+                craft_ui::ComboBox::from_id_salt("print_scale").selected_text(scale).show_ui(ui, |ui| {
                     ui.selectable_value(&mut p.scale, FitScale::Shrink, tr("Actual size, shrunk to fit when larger"));
                     ui.selectable_value(&mut p.scale, FitScale::Fill, tr("Fit to the page"));
                 });
@@ -492,7 +492,7 @@ fn printer_picker(ui: &mut egui::Ui, p: &mut PrintUi) {
     ui.add_enabled_ui(!p.spooler.busy(), |ui| {
         ui.horizontal(|ui| {
             let label = ui.label(tr("Printer:"));
-            egui::ComboBox::from_id_salt("print_printer")
+            craft_ui::ComboBox::from_id_salt("print_printer")
                 .width(230.0)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .selected_text(shown)
@@ -536,7 +536,7 @@ fn system_section(ui: &mut egui::Ui, p: &mut PrintUi, t: &crate::theme::Tokens, 
         ui.horizontal(|ui| {
             let label = ui.label(tr("Two-sided:"));
             let shown = choices.iter().find(|(value, _)| *value == settings.duplex).map_or(tr("Printer default"), |(_, text)| *text);
-            egui::ComboBox::from_id_salt("print_duplex")
+            craft_ui::ComboBox::from_id_salt("print_duplex")
                 .width(230.0)
                 .wrap_mode(egui::TextWrapMode::Truncate)
                 .selected_text(shown)
