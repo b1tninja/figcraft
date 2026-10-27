@@ -18,7 +18,8 @@ permissions its manifest asks for, and nothing more.
   plugin can also keep settings from one run to the next.
 - **Widgets (API 3).** A plugin can put a layer of its own on the canvas: it describes the layer
   (frames with auto layout, text, shapes, images), FigCraft builds it, and a click on one of its
-  parts calls the plugin back to redraw it from its state, which is kept in the document.
+  parts calls the plugin back to redraw it from its state, which is kept in the document. Since
+  API 4 a widget can also have editable text fields and a small property menu.
 - **Permissions.** The manifest says whether the plugin only reads the document or may edit it, and
   can narrow the commands it may call. FigCraft enforces both.
 - **Distribution.** A team's own `figcraft-server` can keep a plugin directory: plugins are
@@ -91,6 +92,17 @@ and its state (a small JSON object) in its own layer data, so a saved file, a co
 a live session carries the widget as it is, and a copy is a widget of its own. A widget whose
 plugin isn't installed stays as it was drawn; clicking it says the plugin is missing.
 
+**Fields and menus (API 4).** A text layer of a widget can be an editable field: double-click it
+with the Move tool and it is edited like any text (all of it selected first). When editing ends
+(Escape, or a click elsewhere), the typing is put back and the new value goes to the widget
+instead: it is cleaned (line breaks kept, tabs become spaces, other control characters dropped),
+refused when longer than 1,000 characters, written into the widget's state under the field's
+name and into the field's text, and the plugin is called back to redraw, all as one undo step
+(none when the text didn't change). The value lives in the state, so it syncs and saves like the
+rest of it. A widget can also carry a property menu: while it is the only layer selected, a
+small bar over it shows its actions and toggles as buttons and its colour choices as swatches;
+using one calls the plugin back, one undo step. The labels are the plugin's own text.
+
 In a presented prototype (the presenter or the preview pane) clicks on a widget's clickable parts
 call its plugin back the same way, with the same limits, but on the prototype's own copy of the
 file: the widget changes in the prototype only, the file and its undo history stay as they are,
@@ -115,6 +127,8 @@ From scripts, the CLI and MCP the same commands apply, panels included:
 {"command": "widget.insert", "params": {"plugin": "org.figcraft.examples.counter", "x": 0, "y": 0}}
 {"command": "widget.list", "params": {}}
 {"command": "widget.click", "params": {"id": 12, "target": "increment"}}
+{"command": "widget.setText", "params": {"id": 12, "field": "label", "value": "Votes"}}
+{"command": "widget.menu", "params": {"id": 12, "item": "color", "value": "#14AE5C"}}
 ```
 
 `figcraft-cli run script.jsonl --in design.figcraft --out tidy.figcraft` runs that headless; over
@@ -132,9 +146,11 @@ plugins: import them in the script.
 | `plugin.close` | `{id}` | Closes plugin `id`'s panel and ends its session. `{closed}` says whether one was open. |
 | `plugins.runLast` | `{}` | Runs the last plugin command again. |
 | `plugins.manage` | `{}` | Opens the Plugins window; returns the list like `plugin.list`. |
-| `widget.insert` | `{plugin, x?, y?, fuel?}` | Puts widget plugin `plugin`'s widget on the current page, its top-left at `x`, `y` (default: centred in the view), and selects it; the plugin draws it. One undo step. Returns `{id, plugin, state, targets, output, logs, calls, fuel}`: `targets` are the names of its clickable parts. |
+| `widget.insert` | `{plugin, x?, y?, fuel?}` | Puts widget plugin `plugin`'s widget on the current page, its top-left at `x`, `y` (default: centred in the view), and selects it; the plugin draws it. One undo step. Returns `{id, plugin, state, targets, fields, menu, output, logs, calls, fuel}`: `targets` are the names of its clickable parts, `fields` of its editable fields, `menu` its property menu items. |
 | `widget.click` | `{id, target, fuel?}` | Clicks part `target` of widget `id` (or of the widget a layer `id` is in), as a click on the canvas would: the plugin is called back and redraws it. One undo step; returns like `widget.insert`. |
-| `widget.list` | `{}` | `{widgets: [{id, plugin, name, page, state, targets}]}`: every widget in the file. |
+| `widget.setText` | `{id, field, value, fuel?}` | Sets editable field `field` of widget `id` (or of the widget a layer `id` is in) to the text `value`, as editing it on the canvas would: the value (at most 1,000 characters, cleaned) goes into the state under the field's name and into the field's text, and the plugin is called back. One undo step; returns like `widget.insert`. |
+| `widget.menu` | `{id, item, value?, fuel?}` | Uses item `item` of widget `id`'s property menu, as its bar would: an action takes no `value`; a toggle takes `true` or `false` (default: the opposite of now); a colour takes one of its options (hex, any case). The plugin is called back. One undo step; returns like `widget.insert`. |
+| `widget.list` | `{}` | `{widgets: [{id, plugin, name, page, state, targets, fields, menu}]}`: every widget in the file. |
 | `plugin.directory.list` | `{server?, query?}` | The plugin directory at `server` (`ws://host:port/`; default: the one browsed last): `{server, plugins: [{id, name, version, description, author, api, access, commands, widget, bytes, sha256, published, versions, installed, update}]}`, the latest version of each plugin whose id, name, description or author contains `query`. `installed` is the installed version (or null), `update` whether the listed one is newer. |
 | `plugin.directory.install` | `{id, version?, confirm, server?, sha256?}` | Downloads version `version` (default: the latest) and installs it, or updates the installed one. `confirm` must be `true` (installing runs the plugin's code: show its permissions first); without it nothing is downloaded. The download must match the SHA-256 the directory lists (and `sha256`, the one shown, when given). Returns `{installed, name, version, permissions, sha256, path, source, replaced}`. |
 | `plugin.directory.publish` | `{path \| plugin, server}` | Publishes a plugin folder (or its `figcraft-plugin.json`), or an installed plugin, as a new version. `server` carries the server's key: `ws://host:port/?key=…`. Returns `{published, server}`. |
@@ -224,7 +240,7 @@ plugin directory requests (`plugin.directory.*` says so). Import plugins with `p
 | `version`, `description` | Optional text. A plugin published to a [directory](#plugin-directories) needs a `version` of one to four numbers (`1.2.0`), each version newer than the last. |
 | `author` | Optional: who made it, as you type it (64 characters at most); plugin directories show it. |
 | `main` | Required. The module, a `.wasm` path relative to the manifest, inside its folder. |
-| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets) or `4` (saving files). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
+| `api` | The plugin API version the plugin was written for: `1` (the default), `2` (panels and settings), `3` (widgets) or `4` (saving files, widget fields and property menus). A manifest asking for a newer one than FigCraft runs is refused, so a plugin that needs panels, widgets or `saveFile` fails clearly on an older FigCraft. |
 | `permissions.saveFile` | API 4: `true` lets the plugin offer a file to save (an exporter's output). FigCraft asks the user where it goes with its own Save dialog (a download in the browser); the plugin never gets a path. Manage plugins lists it ("can save files"). A plugin directory's entries don't carry it (their wire format stays as it is), so installing any API 4 plugin from one says it may offer files to save. |
 | `widget` | API 3: `true` when the plugin draws a widget (it's listed in Plugins ▸ Widgets). |
 | `permissions.access` | `read` (the default): commands that leave the document as it is; such plugins also run from Dev Mode's Inspect tab. `write`: edits too. |
@@ -263,7 +279,9 @@ WebAssembly in a debug build, far less in a release build), 64 MB of memory, 100
 16 MB. A panel spec is at most 64 KB with 64 controls; settings are at most 64 KB per plugin (keys
 and JSON values), keys 1–128 characters. A widget callback gets the same limits; its description is
 at most 4 MB with 256 layers nested 16 deep, its state at most 16 KB (keys 1–128 characters), and
-its images 1 MB each, 2 MB together and 4096 pixels on a side.
+its images 1 MB each, 2 MB together and 4096 pixels on a side. A property menu has at most 8
+items (labels up to 32 characters), a colour item 1–8 colours; a field's value is at most 1,000
+characters.
 
 Copying a byte across the guest-memory boundary costs one additional fuel, reserved before the
 allocation or copy. This also applies when the configured per-call overhead is zero. A reply
@@ -272,9 +290,11 @@ every ABI import, including calls which only query the reply length.
 
 ## ABI (version 4)
 
-Version 2 adds panels and settings to version 1, version 3 adds widgets and version 4 adds
-`save_file`; a version 1, 2 or 3
-module runs unchanged and gets the input it always got. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
+Version 2 adds panels and settings to version 1, version 3 adds widgets, and version 4 adds
+`save_file` and widget fields and property menus (new keys in the widget description and new
+widget events); a module written for an older version runs unchanged and gets the input it always
+got. A widget description with a field or a menu from a plugin whose manifest says `3` is refused,
+and a FigCraft that runs an older API refuses a manifest that asks for `4` when it's imported. Strings are UTF-8 `(ptr, len)` pairs in the plugin's linear memory; all values
 are `i32`.
 
 The module **exports** `memory` and `figcraft_run(input_len) -> status`. When `figcraft_run` starts,
@@ -298,6 +318,15 @@ for a new widget) and what was clicked (`event` is null when it's inserted):
 
 ```json
 {"api": 3, "command": "widget", "params": {}, "selection": [], "widget": {"id": 12, "state": {"count": 2}, "event": {"target": "increment"}}}
+```
+
+With API 4 the event can also be an edited field (its value is already in `state` under the
+field's name) or a property menu item (`value`: null for an action, the new `true`/`false` for a
+toggle, the colour picked for a colour item):
+
+```json
+{"api": 4, "command": "widget", "params": {}, "selection": [], "widget": {"id": 12, "state": {"count": 2, "label": "Votes"}, "event": {"field": "label", "value": "Votes"}}}
+{"api": 4, "command": "widget", "params": {}, "selection": [], "widget": {"id": 12, "state": {"count": 2}, "event": {"menu": "color", "value": "#14AE5C"}}}
 ```
 
 It returns `0` for success; anything else fails the run (and rolls it back), with the text passed
@@ -370,10 +399,23 @@ ignored in auto layout), `width` and `height`, `fill` and `stroke` (hex colours)
 `vertical`), `gap`, `padding`, `justify` and `align` (`min`, `center`, `max`: along and across the
 layout) and `children`;
 with auto layout it hugs its contents on an axis without a size. A text has `text`, `size`,
-`color` and `bold` (with a `width` it wraps). An image has `data`, the image's bytes (PNG, JPEG…)
+`color` and `bold` (with a `width` it wraps), and with API 4 may have a `field` (a name like a
+target's): the text is then an editable field showing its current value. An image has `data`, the image's bytes (PNG, JPEG…)
 as base64, usually carried in the module itself; without a size it takes the image's.
 FigCraft checks the whole description (kinds, sizes, numbers, colours, lengths, counts, depth,
 image sizes) and refuses it if anything is off.
+
+With API 4, `menu` beside `root` is the widget's property menu (left out: none), for example:
+
+```json
+"menu": [{"item": "reset", "label": "Reset"},
+         {"item": "big", "label": "Steps of 10", "type": "toggle", "checked": true},
+         {"item": "color", "label": "Colour", "type": "color", "options": ["#1E1E1E", "#0D99FF"], "value": "#0D99FF"}]
+```
+
+Each item has an `item` name (like a target's, each once), a `label` (default: the name) and a
+`type`: `action` (the default), `toggle` (with `checked`) or `color` (with `options`, 1–8 hex
+colours, and optionally `value`, one of them: the current one). Every redraw replaces the menu.
 
 ## Writing a plugin in Rust
 
@@ -390,8 +432,9 @@ image sizes) and refuses it if anything is off.
   button; the palette
   picked last is remembered as a setting for next time. **From hex colours…** takes a palette of
   hex colours in the parameters form.
-- **Counter** (`counter`, API 3): a widget, a count between − and + buttons; each click changes the
-  count kept in the widget's state. It only reads the document.
+- **Counter** (`counter`, API 4): a widget, a count between − and + buttons under a label; each
+  click changes the count kept in the widget's state, a double-click on the label edits it, and its
+  menu resets the count, counts in tens or colours it. It only reads the document.
 - **Export names** (`export-names`, API 4): saves the names of the selected layers (optionally the
   layers inside them too) as `layer-names.txt`. It reads the document and offers the file with
   `save_file`; FigCraft asks where it goes.
@@ -455,8 +498,10 @@ rolls it back. With `"api": 2` in the manifest: `show_ui(&json!({...}))` and `cl
 panel, `setting(key)`, `set_setting(key, &value)` and `delete_setting(key)` for settings. With
 `"api": 3` and `"widget": true`: `input.widget` (`id`, `state`, `target`) when the widget is
 inserted or clicked, and `render_widget(&json!({"state": ..., "root": ...}))` to draw it. With
-`"api": 4` and `"permissions": {"saveFile": true}`: `save_file(name, mime, &bytes)` offers a file;
-FigCraft asks the user where it goes and the plugin never learns a path. Outside
+`"api": 4`, `input.widget` also has `field` or `menu` and the `value` that came with it, and the
+description may have fields and a `menu`; with `"permissions": {"saveFile": true}` too,
+`save_file(name, mime, &bytes)` offers a file; FigCraft asks the user where it goes and the plugin
+never learns a path. Outside
 WebAssembly every host call fails, so the plugin's own logic can be unit-tested with `cargo test`.
 
 Any language that compiles to WebAssembly works the same way: export `memory` and `figcraft_run`,
@@ -469,8 +514,8 @@ import what you need from `figcraft`.
   install counts, and updates are found when you browse, not in the background. The browser build
   can't use a directory yet.
 - Plugins written for other apps (JavaScript plugins) don't run.
-- Widgets: clicks are their only events (no text input, hover, property menu or timers), they
-  can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
+- Widgets: clicks, field edits and menu items are their only events (no hover or timers), a field
+  is plain text (no placeholder, length or single-line setting), they can't open a panel, and their layers are frames, text, rectangles, ellipses and images only (no
   vectors, components or variables).
 - Panels: no images, sliders or free layout inside a panel.
 - Data in the document: plugins keep data on layers (pages included) with `node.set {props:

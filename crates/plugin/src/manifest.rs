@@ -43,7 +43,7 @@ pub struct Manifest {
     /// The WebAssembly module, relative to the manifest (`plugin.wasm`).
     pub main: String,
     /// The plugin API version the plugin was written for (1 when not given; panels and settings
-    /// need 2, widgets 3, `saveFile` 4).
+    /// need 2, widgets 3, `saveFile`, widget fields and property menus 4).
     #[serde(default = "api_version", deserialize_with = "api_from_number_or_string")]
     pub api: u32,
     #[serde(default)]

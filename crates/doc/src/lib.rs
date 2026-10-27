@@ -11,6 +11,7 @@
 pub mod board;
 pub mod colors;
 pub mod comments;
+pub mod facilitation;
 pub mod geometry;
 pub mod handoff;
 pub mod ids;
@@ -27,6 +28,7 @@ pub mod vector_regions;
 pub use board::*;
 pub use colors::*;
 pub use comments::*;
+pub use facilitation::*;
 pub use figcraft_color as color;
 pub use figcraft_geom as geom;
 pub use handoff::*;
@@ -208,6 +210,15 @@ pub struct Document {
     /// [`handoff`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub dev_snapshots: BTreeMap<NodeId, Arc<DevSnapshot>>,
+    /// A board's countdown (see [`facilitation`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<BoardTimer>,
+    /// A board's vote, running or ended.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vote: Option<Vote>,
+    /// The vote's ballots, by voter.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub votes: Ballots,
 }
 
 impl Default for Document {
@@ -247,6 +258,9 @@ impl Document {
             image_presets: Vec::new(),
             annotation_categories: None,
             dev_snapshots: BTreeMap::new(),
+            timer: None,
+            vote: None,
+            votes: BTreeMap::new(),
         }
     }
 
@@ -1255,6 +1269,8 @@ mod proto_expr_mode_tests;
 mod proto_expr_parse_tests;
 #[cfg(test)]
 mod proto_expr_tests;
+#[cfg(test)]
+mod proto_overlay_anchor_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

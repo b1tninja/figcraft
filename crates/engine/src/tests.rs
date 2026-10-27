@@ -415,6 +415,9 @@ fn every_command_survives_junk_params() {
         json!({"from": 2, "to": 1, "side": "auto"}),
         // Widgets: plugins, targets and fuel as junk.
         json!({"id": 1, "plugin": {"x": 1}, "target": [1], "fuel": -1e308, "x": 1e308}),
+        // Widget fields and menus: fields, items and values as junk.
+        json!({"id": 1, "field": {"x": 1}, "item": [1], "value": {"x": "\u{0}"}, "fuel": 1e308}),
+        json!({"id": [1], "field": "label\u{0}", "item": "", "value": "\u{7}".repeat(5000)}),
         // Plugin directories: ids, versions, servers and confirmations as junk.
         json!({"id": "../../x", "version": {"x": 1}, "server": "ws://\u{0}/?key=", "confirm": "yes", "path": [5], "plugin": [1], "query": 7, "sha256": 3}),
         json!({"id": "org.example.x", "version": "1.0.0", "server": "wss://[::1", "confirm": true, "plugin": "nope"}),

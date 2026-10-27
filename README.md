@@ -121,6 +121,16 @@
   <p align="center"><sub><b>Live sessions</b>: three apps on one <code>figcraft-server</code> file, with cursors, selections, cursor chat and spotlight</sub></p>
 </td>
 </tr>
+<tr>
+<td width="50%" valign="top">
+  <img src="docs/images/shot-8-board.png" alt="A board file named Sprint retro on a dot grid: a Sprint 14 retro made from the retrospective template, with Went well, To improve and Next steps sections of sticky notes, vote counts of 3, 2, 1 and 1 on four stickies after a vote has ended, and below it a pull request flow chart from the flow chart template whose shapes are joined by straight and elbow connectors with Yes and No labels; a timer pill in the top right shows 4:30 left with pause, add a minute, stop and Results buttons" width="100%">
+  <p align="center"><sub><b>Boards</b>: a whiteboard file kind with sticky notes, templates, connectors, a shared timer and voting, in the same live sessions</sub></p>
+</td>
+<td width="50%" valign="top">
+  <img src="docs/images/shot-9-devmode-measure.png" alt="Dev Mode on the Ridgeline home screen with the featured trail card selected: red redlines kept on the canvas show 118.3 from the card to the search field, 62.1 from the card to the first trail row and 256.3 along the card's left side, and the Inspect panel's Measurements section lists the three with their values under an Add measurement menu" width="100%">
+  <p align="center"><sub><b>Dev Mode measurements</b>: redlines placed between layers or along a side, saved in the file and following the layers · <code>examples/ridgeline-app.figcraft</code></sub></p>
+</td>
+</tr>
 </table>
 
 ## Made in FigCraft
@@ -198,7 +208,7 @@ exposes to agents, and exported at 2x by FigCraft's own renderer. The source fil
     </td>
     <td width="50%" valign="top">
       <h3>Prototype and hand off</h3>
-      Connections, triggers, actions and Smart Animate-style transitions, variables with conditionals (if / else if / else built in the interaction editor, expressions like <code>count + 1</code>), flows, a presentation view with device frames, hotspot hints and an Inspect panel, and a live preview pane. Alt to measure distances and padding on the canvas, Inspect mode with measurements, annotations in colour-coded categories, a ready-for-dev list with a focus view and Compare changes (before / after with property-level diffs since a frame was marked ready), and code (CSS, HTML, React, Leptos, SwiftUI, Compose) where components take their properties as parameters, comment threads pinned to frames (replies, @mentions, reactions, read state) and named version history. Export any layer at any scale to PNG, JPG, WebP, SVG or PDF.
+      Connections, triggers, actions and Smart Animate-style transitions, variables with conditionals (if / else if / else built in the interaction editor, expressions like <code>count + 1</code>), flows, a presentation view with device frames, hotspot hints and an Inspect panel, and a live preview pane. Alt to measure distances and padding on the canvas, Inspect mode with measurements, annotations in colour-coded categories, a ready-for-dev list with a focus view and Compare changes (before / after with property-level diffs since a frame was marked ready), and code (CSS, HTML, React, Vue, Leptos, SwiftUI, Compose) where components take their properties as parameters, comment threads pinned to frames (replies, @mentions, reactions, read state) and named version history. Export any layer at any scale to PNG, JPG, WebP, SVG or PDF.
     </td>
   </tr>
 </table>

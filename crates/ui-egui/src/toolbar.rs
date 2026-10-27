@@ -134,7 +134,7 @@ pub(crate) fn bar_width(app: &FigApp) -> f32 {
 fn main_width(groups: &[Group], board: bool) -> f32 {
     let (cell, gap) = (TOOL_CELL, 4.0);
     let carets = groups.iter().filter(|g| g.has_flyout()).count() as f32 * (FLYOUT_GAP + FLYOUT_W);
-    let end = if board { cell + 16.0 } else { 4.0 * 34.0 + 24.0 };
+    let end = if board { 2.0 * cell + gap + 16.0 } else { 4.0 * 34.0 + 24.0 };
     groups.len() as f32 * (cell + gap) + carets + 2.0 * (cell + gap) + 16.0 + end
 }
 
@@ -157,6 +157,7 @@ fn main_toolbar(app: &mut FigApp, ui: &mut Ui, canvas: Rect, t: &Tokens, board: 
     x += 8.0;
     if board {
         // Boards have no prototypes or Dev Mode; the Design panel is hidden until asked for.
+        x = crate::board_picker::button(app, ui, pos2(x, cy), rect.min.y, t);
         let r = Rect::from_center_size(pos2(x + TOOL_CELL / 2.0, cy), vec2(TOOL_CELL, TOOL_CELL));
         let tip = crate::shortcuts::tip(tr("Design panel"), "view.design");
         if tool_cell(ui, t, r, "board_panel", Icon::Panels, app.ui.board_panel, tip).clicked() {

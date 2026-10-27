@@ -27,6 +27,10 @@
 //! each time a part of it named as a `target` is clicked, the plugin is called with
 //! [`Input::widget`] set (its state and what was clicked) and hands back the new state and the
 //! layers with [`render_widget`]. Each call starts afresh: the state is all a widget remembers.
+//! With API 4 a widget can also have editable text fields (a text layer with a `field` name; an
+//! edit calls back with [`Widget::field`] and [`Widget::value`], and the value is already in the
+//! state under the field's name) and a property menu (`menu` beside `root`; choosing an item calls
+//! back with [`Widget::menu`] and, for a toggle or a colour, [`Widget::value`]).
 //!
 //! The SDK is `no_std` (it needs `alloc`); outside WebAssembly every host call fails, so a plugin's
 //! own logic can still be unit-tested on the host. See `docs/plugins.md` for the ABI underneath.
@@ -59,7 +63,7 @@ pub struct Input {
     pub widget: Option<Widget>,
 }
 
-/// A widget being inserted (no `target`) or clicked.
+/// A widget being inserted (no `target`, `field` or `menu`), clicked, edited or given a menu item.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Widget {
     /// The widget's layer id.
@@ -68,6 +72,13 @@ pub struct Widget {
     pub state: Value,
     /// The target clicked.
     pub target: Option<String>,
+    /// API 4: the editable field edited.
+    pub field: Option<String>,
+    /// API 4: the property menu item chosen.
+    pub menu: Option<String>,
+    /// API 4: the field's new text, a toggle's new state (`true`/`false`) or the colour chosen
+    /// (null for a click or an action).
+    pub value: Value,
 }
 
 /// A button pressed or a value changed in the plugin's panel.
@@ -94,10 +105,17 @@ impl Input {
                 value: e.get("value").cloned().unwrap_or(Value::Null),
                 values: v.get("values").cloned().unwrap_or(Value::Null),
             }),
-            widget: v.get("widget").map(|w| Widget {
-                id: w.get("id").and_then(Value::as_u64).unwrap_or_default(),
-                state: w.get("state").cloned().unwrap_or_else(|| json!({})),
-                target: w.get("event").and_then(|e| e.get("target")).and_then(Value::as_str).map(ToString::to_string),
+            widget: v.get("widget").map(|w| {
+                let event = |key: &str| w.get("event").and_then(|e| e.get(key));
+                let name = |key: &str| event(key).and_then(Value::as_str).map(ToString::to_string);
+                Widget {
+                    id: w.get("id").and_then(Value::as_u64).unwrap_or_default(),
+                    state: w.get("state").cloned().unwrap_or_else(|| json!({})),
+                    target: name("target"),
+                    field: name("field"),
+                    menu: name("menu"),
+                    value: event("value").cloned().unwrap_or(Value::Null),
+                }
             }),
         })
     }
@@ -360,5 +378,13 @@ mod tests {
             .widget
             .unwrap_or_default();
         assert_eq!((w.id, &w.state, w.target.as_deref()), (9, &json!({"n": 1}), Some("inc")));
+        let e =
+            Input::parse(r#"{"widget":{"id":9,"state":{},"event":{"field":"label","value":"Hi"}}}"#).unwrap_or_default().widget.unwrap_or_default();
+        assert_eq!((e.field.as_deref(), &e.value, e.target.is_none()), (Some("label"), &json!("Hi"), true));
+        let m = Input::parse(r##"{"widget":{"id":9,"state":{},"event":{"menu":"color","value":"#FF0000"}}}"##)
+            .unwrap_or_default()
+            .widget
+            .unwrap_or_default();
+        assert_eq!((m.menu.as_deref(), &m.value), (Some("color"), &json!("#FF0000")));
     }
 }
